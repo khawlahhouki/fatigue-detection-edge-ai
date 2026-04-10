@@ -1,0 +1,8 @@
+../Core/Src/max86141.c:33:13:CS_LOW	1
+../Core/Src/max86141.c:42:13:CS_HIGH	1
+../Core/Src/max86141.c:92:6:MAX86141_WriteReg	1
+../Core/Src/max86141.c:112:9:MAX86141_ReadReg	1
+../Core/Src/max86141.c:155:9:MAX86141_Init	2
+../Core/Src/max86141.c:291:9:MAX86141_GetFIFOCount	1
+../Core/Src/max86141.c:328:9:MAX86141_ReadFIFO	4
+../Core/Src/max86141.c:392:6:MAX86141_DecodeFIFO	2

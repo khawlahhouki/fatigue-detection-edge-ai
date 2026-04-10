@@ -1,0 +1,7 @@
+../Core/Src/lsm6dso_imu.c:41:16:LSM6DSO_SPI_Write	32	static
+../Core/Src/lsm6dso_imu.c:65:16:LSM6DSO_SPI_Read	32	static
+../Core/Src/lsm6dso_imu.c:96:9:LSM6DSO_IMU_Init	40	static
+../Core/Src/lsm6dso_imu.c:171:9:LSM6DSO_IMU_Start	16	static
+../Core/Src/lsm6dso_imu.c:212:9:LSM6DSO_IMU_ReadSample	24	static
+../Core/Src/lsm6dso_imu.c:250:9:LSM6DSO_IMU_GetFIFOLevel	16	static
+../Core/Src/lsm6dso_imu.c:280:9:LSM6DSO_IMU_ReadFIFO	64	static

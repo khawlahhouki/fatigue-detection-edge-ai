@@ -1,0 +1,11 @@
+../Core/Src/ads1292r.c:159:6:ADS1292R_SetBuffer	4	static
+../Core/Src/ads1292r.c:251:9:ADS1292R_SPI_TransmitReceive	32	static
+../Core/Src/ads1292r.c:268:9:ADS1292R_SendCmd	24	static
+../Core/Src/ads1292r.c:287:9:ADS1292R_RwReg	24	static
+../Core/Src/ads1292r.c:316:6:ADS1292R_WriteMultiRegs	24	static
+../Core/Src/ads1292r.c:342:6:ADS1292R_ReadMultiRegs	24	static
+../Core/Src/ads1292r.c:375:6:ADS1292R_GetValue	16	static
+../Core/Src/ads1292r.c:403:9:ADS1292R_Init	16	static
+../Core/Src/ads1292r.c:470:6:ADS1292R_ADCStartNormal	8	static
+../Core/Src/ads1292r.c:484:6:ADS1292R_Decode	32	static
+../Core/Src/ads1292r.c:522:6:ADS1292R_ADCStartTest	8	static

@@ -1,0 +1,8 @@
+../Core/Src/shtc3.c:26:10:shtc3_read_id	40	static
+../Core/Src/shtc3.c:54:10:shtc3_sleep	32	static
+../Core/Src/shtc3.c:62:10:shtc3_wakeup	32	static
+../Core/Src/shtc3.c:71:17:checkCRC	24	static
+../Core/Src/shtc3.c:94:17:_read_values	32	static
+../Core/Src/shtc3.c:118:17:_perform_measurements	48	static
+../Core/Src/shtc3.c:135:10:shtc3_perform_measurements	24	static
+../Core/Src/shtc3.c:140:10:shtc3_perform_measurements_low_power	24	static

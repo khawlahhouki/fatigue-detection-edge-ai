@@ -127,6 +127,7 @@ int32_t LSM6DSO_IMU_Init(SPI_HandleTypeDef *hspi,
     if (rst) return LSM6DSO_IMU_ERR;
 
     /* BDU et auto-incrément */
+    /*bit 3 c'est par defaut a SIM = 0 → SPI 4 fils (MOSI, MISO, SCK, CS) */
     lsm6dso_block_data_update_set(&lsm6dso_ctx, PROPERTY_ENABLE);
     lsm6dso_auto_increment_set(&lsm6dso_ctx, PROPERTY_ENABLE);
 
@@ -153,7 +154,30 @@ int32_t LSM6DSO_IMU_Init(SPI_HandleTypeDef *hspi,
 
     /* FIFO — watermark configuré MAIS mode BYPASS
      * BYPASS = FIFO désactivé → rien ne s'accumule    */
-    lsm6dso_fifo_watermark_set(&lsm6dso_ctx, 20U);
+    // 34 slots = 17 Accel + 17 Gyro = 163 ms de temps réel
+    lsm6dso_fifo_watermark_set(&lsm6dso_ctx, 34U);
+
+    /*Watermark = 20 car :
+
+    ✓ Fréquence interruption = 10 Hz
+      → ni trop fréquent ni trop rare
+
+    ✓ 10 valeurs XL + 10 valeurs GY
+      → moyenne statistiquement fiable
+      → bruit réduit par facteur 3
+
+    ✓ Latence = 96ms
+      → acceptable pour correction artefacts PPG
+      → négligeable pour features IMU sur 3s
+
+    ✓ RAM FIFO largement suffisante
+      → 438 slots disponibles
+      → 20 utilisés avant lecture
+
+    Moins → trop d'interruptions
+    Plus  → trop de latence ou moyenne peu améliorée
+    20    → le juste milieu ✓
+*/
     lsm6dso_fifo_xl_batch_set(&lsm6dso_ctx, LSM6DSO_XL_NOT_BATCHED);
     lsm6dso_fifo_gy_batch_set(&lsm6dso_ctx, LSM6DSO_GY_NOT_BATCHED);
     lsm6dso_fifo_mode_set(&lsm6dso_ctx, LSM6DSO_BYPASS_MODE);
@@ -350,5 +374,71 @@ int32_t LSM6DSO_IMU_ReadFIFO(IMU_Sample_t *sample)
     /* Timestamp rempli par la tâche (accès TIM2 = couche HAL/app) */
     sample->timestamp = 0;
 
+    return LSM6DSO_IMU_OK;
+}
+
+
+int32_t LSM6DSO_IMU_ReadFIFO_Raw(IMU_Raw_t *slots,
+                                   uint8_t   *count_out,
+                                   uint32_t   isr_timestamp)
+{
+    if (slots == NULL || count_out == NULL)
+        return LSM6DSO_IMU_ERR;
+
+    uint16_t           fifo_level = 0;
+    uint8_t            fifo_raw[6];
+    lsm6dso_fifo_tag_t tag;
+    int16_t            raw[3];
+    uint8_t            xl_index = 0;
+
+    /* Lire niveau FIFO */
+    if (lsm6dso_fifo_data_level_get(&lsm6dso_ctx,
+                                     &fifo_level) != 0)
+        return LSM6DSO_IMU_ERR;
+
+    if (fifo_level == 0) return LSM6DSO_IMU_ERR;
+
+    /* Lire tous les slots */
+    for (uint16_t i = 0; i < fifo_level; i++)
+    {
+        lsm6dso_fifo_sensor_tag_get(&lsm6dso_ctx, &tag);
+        lsm6dso_fifo_out_raw_get(&lsm6dso_ctx, fifo_raw);
+
+        /* Traiter XL seulement si tableau pas plein */
+            if (tag == LSM6DSO_XL_NC_TAG && xl_index < 17)
+            {
+                raw[0] = (int16_t)((fifo_raw[1] << 8) | fifo_raw[0]);
+                raw[1] = (int16_t)((fifo_raw[3] << 8) | fifo_raw[2]);
+                raw[2] = (int16_t)((fifo_raw[5] << 8) | fifo_raw[4]);
+
+                slots[xl_index].accel_mg[0] =
+                    lsm6dso_from_fs4_to_mg(raw[0]);
+                slots[xl_index].accel_mg[1] =
+                    lsm6dso_from_fs4_to_mg(raw[1]);
+                slots[xl_index].accel_mg[2] =
+                    lsm6dso_from_fs4_to_mg(raw[2]);
+
+                xl_index++;
+            }
+    }
+
+    /* -----------------------------------------------
+     * Calculer les timestamps après la boucle
+     *
+     * On connaît maintenant xl_index = 10
+     * Le tableau est rempli de slots[0] à slots[9]
+     *
+     * slots[9] = dernier slot = isr_timestamp
+     * slots[8] = isr_timestamp - 1 × 9615µs
+     * slots[k] = isr_timestamp - (9-k) × 9615µs
+     * ----------------------------------------------- */
+    for (uint8_t k = 0; k < xl_index; k++)
+    {
+        uint8_t distance = (xl_index - 1) - k;
+        slots[k].timestamp = isr_timestamp
+                           - (uint32_t)distance * 9615;
+    }
+
+    *count_out = xl_index;
     return LSM6DSO_IMU_OK;
 }

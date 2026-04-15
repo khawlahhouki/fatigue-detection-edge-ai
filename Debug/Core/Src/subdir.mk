@@ -10,10 +10,13 @@ C_SRCS += \
 ../Core/Src/freertos.c \
 ../Core/Src/gpio.c \
 ../Core/Src/i2c.c \
+../Core/Src/imu_interpolation.c \
 ../Core/Src/lsm6dso_imu.c \
 ../Core/Src/main.c \
 ../Core/Src/max86141.c \
 ../Core/Src/memorymap.c \
+../Core/Src/nlms_filter.c \
+../Core/Src/ppg_filter.c \
 ../Core/Src/shtc3.c \
 ../Core/Src/spi.c \
 ../Core/Src/stm32h7xx_hal_msp.c \
@@ -31,10 +34,13 @@ OBJS += \
 ./Core/Src/freertos.o \
 ./Core/Src/gpio.o \
 ./Core/Src/i2c.o \
+./Core/Src/imu_interpolation.o \
 ./Core/Src/lsm6dso_imu.o \
 ./Core/Src/main.o \
 ./Core/Src/max86141.o \
 ./Core/Src/memorymap.o \
+./Core/Src/nlms_filter.o \
+./Core/Src/ppg_filter.o \
 ./Core/Src/shtc3.o \
 ./Core/Src/spi.o \
 ./Core/Src/stm32h7xx_hal_msp.o \
@@ -52,10 +58,13 @@ C_DEPS += \
 ./Core/Src/freertos.d \
 ./Core/Src/gpio.d \
 ./Core/Src/i2c.d \
+./Core/Src/imu_interpolation.d \
 ./Core/Src/lsm6dso_imu.d \
 ./Core/Src/main.d \
 ./Core/Src/max86141.d \
 ./Core/Src/memorymap.d \
+./Core/Src/nlms_filter.d \
+./Core/Src/ppg_filter.d \
 ./Core/Src/shtc3.d \
 ./Core/Src/spi.d \
 ./Core/Src/stm32h7xx_hal_msp.d \
@@ -75,7 +84,7 @@ Core/Src/%.o Core/Src/%.su Core/Src/%.cyclo: ../Core/Src/%.c Core/Src/subdir.mk
 clean: clean-Core-2f-Src
 
 clean-Core-2f-Src:
-	-$(RM) ./Core/Src/ads1292r.cyclo ./Core/Src/ads1292r.d ./Core/Src/ads1292r.o ./Core/Src/ads1292r.su ./Core/Src/dma.cyclo ./Core/Src/dma.d ./Core/Src/dma.o ./Core/Src/dma.su ./Core/Src/freertos.cyclo ./Core/Src/freertos.d ./Core/Src/freertos.o ./Core/Src/freertos.su ./Core/Src/gpio.cyclo ./Core/Src/gpio.d ./Core/Src/gpio.o ./Core/Src/gpio.su ./Core/Src/i2c.cyclo ./Core/Src/i2c.d ./Core/Src/i2c.o ./Core/Src/i2c.su ./Core/Src/lsm6dso_imu.cyclo ./Core/Src/lsm6dso_imu.d ./Core/Src/lsm6dso_imu.o ./Core/Src/lsm6dso_imu.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/max86141.cyclo ./Core/Src/max86141.d ./Core/Src/max86141.o ./Core/Src/max86141.su ./Core/Src/memorymap.cyclo ./Core/Src/memorymap.d ./Core/Src/memorymap.o ./Core/Src/memorymap.su ./Core/Src/shtc3.cyclo ./Core/Src/shtc3.d ./Core/Src/shtc3.o ./Core/Src/shtc3.su ./Core/Src/spi.cyclo ./Core/Src/spi.d ./Core/Src/spi.o ./Core/Src/spi.su ./Core/Src/stm32h7xx_hal_msp.cyclo ./Core/Src/stm32h7xx_hal_msp.d ./Core/Src/stm32h7xx_hal_msp.o ./Core/Src/stm32h7xx_hal_msp.su ./Core/Src/stm32h7xx_hal_timebase_tim.cyclo ./Core/Src/stm32h7xx_hal_timebase_tim.d ./Core/Src/stm32h7xx_hal_timebase_tim.o ./Core/Src/stm32h7xx_hal_timebase_tim.su ./Core/Src/stm32h7xx_it.cyclo ./Core/Src/stm32h7xx_it.d ./Core/Src/stm32h7xx_it.o ./Core/Src/stm32h7xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32h7xx.cyclo ./Core/Src/system_stm32h7xx.d ./Core/Src/system_stm32h7xx.o ./Core/Src/system_stm32h7xx.su ./Core/Src/tim.cyclo ./Core/Src/tim.d ./Core/Src/tim.o ./Core/Src/tim.su ./Core/Src/tmp117.cyclo ./Core/Src/tmp117.d ./Core/Src/tmp117.o ./Core/Src/tmp117.su
+	-$(RM) ./Core/Src/ads1292r.cyclo ./Core/Src/ads1292r.d ./Core/Src/ads1292r.o ./Core/Src/ads1292r.su ./Core/Src/dma.cyclo ./Core/Src/dma.d ./Core/Src/dma.o ./Core/Src/dma.su ./Core/Src/freertos.cyclo ./Core/Src/freertos.d ./Core/Src/freertos.o ./Core/Src/freertos.su ./Core/Src/gpio.cyclo ./Core/Src/gpio.d ./Core/Src/gpio.o ./Core/Src/gpio.su ./Core/Src/i2c.cyclo ./Core/Src/i2c.d ./Core/Src/i2c.o ./Core/Src/i2c.su ./Core/Src/imu_interpolation.cyclo ./Core/Src/imu_interpolation.d ./Core/Src/imu_interpolation.o ./Core/Src/imu_interpolation.su ./Core/Src/lsm6dso_imu.cyclo ./Core/Src/lsm6dso_imu.d ./Core/Src/lsm6dso_imu.o ./Core/Src/lsm6dso_imu.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/max86141.cyclo ./Core/Src/max86141.d ./Core/Src/max86141.o ./Core/Src/max86141.su ./Core/Src/memorymap.cyclo ./Core/Src/memorymap.d ./Core/Src/memorymap.o ./Core/Src/memorymap.su ./Core/Src/nlms_filter.cyclo ./Core/Src/nlms_filter.d ./Core/Src/nlms_filter.o ./Core/Src/nlms_filter.su ./Core/Src/ppg_filter.cyclo ./Core/Src/ppg_filter.d ./Core/Src/ppg_filter.o ./Core/Src/ppg_filter.su ./Core/Src/shtc3.cyclo ./Core/Src/shtc3.d ./Core/Src/shtc3.o ./Core/Src/shtc3.su ./Core/Src/spi.cyclo ./Core/Src/spi.d ./Core/Src/spi.o ./Core/Src/spi.su ./Core/Src/stm32h7xx_hal_msp.cyclo ./Core/Src/stm32h7xx_hal_msp.d ./Core/Src/stm32h7xx_hal_msp.o ./Core/Src/stm32h7xx_hal_msp.su ./Core/Src/stm32h7xx_hal_timebase_tim.cyclo ./Core/Src/stm32h7xx_hal_timebase_tim.d ./Core/Src/stm32h7xx_hal_timebase_tim.o ./Core/Src/stm32h7xx_hal_timebase_tim.su ./Core/Src/stm32h7xx_it.cyclo ./Core/Src/stm32h7xx_it.d ./Core/Src/stm32h7xx_it.o ./Core/Src/stm32h7xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32h7xx.cyclo ./Core/Src/system_stm32h7xx.d ./Core/Src/system_stm32h7xx.o ./Core/Src/system_stm32h7xx.su ./Core/Src/tim.cyclo ./Core/Src/tim.d ./Core/Src/tim.o ./Core/Src/tim.su ./Core/Src/tmp117.cyclo ./Core/Src/tmp117.d ./Core/Src/tmp117.o ./Core/Src/tmp117.su
 
 .PHONY: clean-Core-2f-Src
 

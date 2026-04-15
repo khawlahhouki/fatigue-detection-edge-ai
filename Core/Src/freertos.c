@@ -18,12 +18,10 @@
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
-#include <lsm6dso_imu.h>
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
-#include  <stdbool.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -35,6 +33,9 @@
 #include "lsm6dso_imu.h"
 #include "tmp117.h"    /* ← doit être présent */
 #include "shtc3.h"
+#include "ppg_filter.h"
+#include "nlms_filter.h"
+#include "imu_interpolation.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,10 +51,11 @@
 /* Taille = 4+4+4+4 = 16 octets
  * cohérent avec Q_TEMPHandle configuré 10 × 16 octets */
 typedef struct {
-    float    temp_skin_c;     /* TMP117 — température peau en °C    */
-    float    temp_ambient_c;  /* SHTC3  — température ambiante °C   */
-    float    humidity_pct;    /* SHTC3  — humidité relative en %    */
-    uint32_t timestamp;       /* TIM2   — instant mesure en µs      */
+    float    temp_skin_c;      /* TMP117 — température peau en °C  */
+    float    temp_ambient_c;   /* SHTC3  — température ambiante °C */
+    float    humidity_pct;     /* SHTC3  — humidité relative en %  */
+    uint32_t timestamptemp117; /* TIM2   — instant mesure TMP117   */
+    uint32_t timestampSHTC3;   /* TIM2   — instant mesure SHTC3    */
 } Temp_Sample_t;
 
 /* USER CODE END Elle regroupe des données de 3 sources
@@ -95,7 +97,7 @@ extern TIM_HandleTypeDef  htim2;
 
 
 /* USER CODE END Variables */
-/* Definitions for vTaskE ADS1MGAcq */
+/* Definitions for vTaskEMGAcq */
 osThreadId_t vTaskEMGAcqHandle;
 const osThreadAttr_t vTaskEMGAcq_attributes = {
   .name = "vTaskEMGAcq",
@@ -130,6 +132,13 @@ const osThreadAttr_t vTaskDSP_attributes = {
   .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for TempProcessTask */
+osThreadId_t TempProcessTaskHandle;
+const osThreadAttr_t TempProcessTask_attributes = {
+  .name = "TempProcessTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* Definitions for Q_TEMP */
 osMessageQueueId_t Q_TEMPHandle;
 const osMessageQueueAttr_t Q_TEMP_attributes = {
@@ -161,6 +170,7 @@ void StartTaskPPG(void *argument);
 void StartTaskIMU(void *argument);
 void StartTaskTemp(void *argument);
 void StartTaskDSP(void *argument);
+void StartTempProcess(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -195,7 +205,7 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the queue(s) */
   /* creation of Q_TEMP */
-  Q_TEMPHandle = osMessageQueueNew (10, 16, &Q_TEMP_attributes);
+  Q_TEMPHandle = osMessageQueueNew (10, 20, &Q_TEMP_attributes);
 
   /* creation of Q_RESULTS */
   Q_RESULTSHandle = osMessageQueueNew (20, 64, &Q_RESULTS_attributes);
@@ -220,6 +230,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of vTaskDSP */
   vTaskDSPHandle = osThreadNew(StartTaskDSP, NULL, &vTaskDSP_attributes);
 
+  /* creation of TempProcessTask */
+  TempProcessTaskHandle = osThreadNew(StartTempProcess, NULL, &TempProcessTask_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -237,7 +250,11 @@ void MX_FREERTOS_Init(void) {
   /* SB_EMG et SB_IMU — trigger = 1 octet pour l'instant
      on ajustera quand vTaskDSP sera codé */
   SB_EMG = xStreamBufferCreate(512, 1);
-  SB_IMU = xStreamBufferCreate(512, 1);
+
+  SB_IMU = xStreamBufferCreate(
+      4 * sizeof(IMU_Batch_t),   /*  4 × 273 = 1092 octets */
+      1 * sizeof(IMU_Batch_t)    /* trigger = 1 batch    */
+  );
 
   if(SB_PPG == NULL || SB_EMG == NULL || SB_IMU == NULL)
   {
@@ -257,7 +274,7 @@ void MX_FREERTOS_Init(void) {
 /* USER CODE END Header_StartTaskEMG */
 void StartTaskEMG(void *argument)
 {
-	/* USER CODE BEGIN StartTaskEMG */
+  /* USER CODE BEGIN StartTaskEMG */
 	  ADS1292R_Sample_t emg_sample;
 	  uint32_t trigger_time_emg = 0;
 
@@ -409,10 +426,8 @@ void StartTaskPPG(void *argument)
 	    }
 	  }
 	  }
-
-  }
   /* USER CODE END StartTaskPPG */
-
+}
 
 /* USER CODE BEGIN Header_StartTaskIMU */
 /**
@@ -423,10 +438,10 @@ void StartTaskPPG(void *argument)
 /* USER CODE END Header_StartTaskIMU */
 void StartTaskIMU(void *argument)
 {
+  /* USER CODE BEGIN StartTaskIMU */
 
-	  /* USER CODE BEGIN StartTaskIMU */
 
-	IMU_Sample_t imu_sample;
+	IMU_Batch_t batch ;
 
 
 	if (xSemaphoreTake(MTX_SPI2Handle, pdMS_TO_TICKS(100)) == pdTRUE)
@@ -449,8 +464,8 @@ void StartTaskIMU(void *argument)
 		  Temps pour remplir 20 slots = 20 / 208 = ~96ms
 
 		  → INT1 se déclenche toutes les ~96ms
-	    /* --- Attendre INT1_IMU (PE13) — watermark FIFO atteint
-	     * Timeout 200ms : capteur silencieux → on retourne attendre */
+	     /* --- Attendre INT1_IMU (PE13) — watermark FIFO atteint
+	      Timeout 200ms : capteur silencieux → on retourne attendre */
 	    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200)) != 0)
 	    {
 	      /* Sauvegarder le timestamp capturé dans l'ISR
@@ -462,33 +477,45 @@ void StartTaskIMU(void *argument)
 	       * Timeout 50ms : bus occupé → on abandonne      */
 	      if (xSemaphoreTake(MTX_SPI2Handle, pdMS_TO_TICKS(50)) == pdTRUE)
 	      {
-	        /* --- Lire et décoder le FIFO
-	         * ReadFIFO lit tous les slots, décode XL et GY,
-	         * calcule la moyenne et remplit imu_sample     */
-	        int32_t ret = LSM6DSO_IMU_ReadFIFO(&imu_sample);
+	    	   /* -----------------------------------------------
+	    	         * Lire les slots bruts du FIFO LSM6DSO
+	    	         *
+	    	         * LSM6DSO_IMU_ReadFIFO_Raw :
+	    	         *   → lit 20 slots (10 XL + 10 GY)
+	    	         *   → garde seulement les 10 slots XL
+	    	         *   → convertit en mg (× 0.122)
+	    	         *   → calcule le timestamp de chaque slot :
+	    	         *     slot 9 = sample_timestamp
+	    	         *     slot 8 = sample_timestamp - 9615µs
+	    	         *     slot 0 = sample_timestamp - 9×9615µs
+	    	         *   → stocke dans batch.slots[]
+	    	         *   → écrit le nombre de slots dans batch.count
+	    	         *
+	    	         * Pas de moyenne → valeurs brutes réelles ✓
+	    	         * ----------------------------------------------- */
+
+	    	  int32_t ret = LSM6DSO_IMU_ReadFIFO_Raw(
+	    	                           batch.slots,
+	    	                           &batch.count,
+	    	                           sample_timestamp);
 
 	        /* --- Libérer le mutex dès que la lecture est terminée */
 	        xSemaphoreGive(MTX_SPI2Handle);
 
 	        /* --- Appliquer le timestamp ISR et envoyer --- */
 	        if (ret == LSM6DSO_IMU_OK && SB_IMU != NULL)
-	        {
-	          /* Timestamp = moment réel de l'interruption
-	           * pas le moment de la lecture (qui peut être
-	           * retardée par le mutex)                     */
-	          imu_sample.timestamp = sample_timestamp;
-
-	          xStreamBufferSend(SB_IMU,
-	                            &imu_sample,
-	                            sizeof(IMU_Sample_t),
-	                            0);
+	              {
+	                  xStreamBufferSend(SB_IMU,
+	                                    &batch,
+	                                    sizeof(IMU_Batch_t),
+	                                    0);
 	        }
 	      }
 	    }
 	  }
 
 
-	  /* USER CODE END StartTaskIMU */
+  /* USER CODE END StartTaskIMU */
 }
 
 /* USER CODE BEGIN Header_StartTaskTemp */
@@ -627,7 +654,8 @@ void StartTaskTemp(void *argument)
 	           * Signal médical le plus important
 	           * shtc3_timestamp disponible si vTaskDSP en a
 	           * besoin séparément                             */
-	          temp_sample.timestamp = tmp117_timestamp;
+	          temp_sample.timestampSHTC3=shtc3_timestamp;
+	          temp_sample.timestamptemp117 = tmp117_timestamp;
 
 	          /* Envoyer vers vTaskDSP via Q_TEMPHandle
 	           * osMessageQueuePut COPIE les données
@@ -641,11 +669,8 @@ void StartTaskTemp(void *argument)
 	        }
 	      }
 	    }
-	  /* USER CODE END StartTaskTemp */
-	  }
-
-
-
+  /* USER CODE END StartTaskTemp */
+}
 
 /* USER CODE BEGIN Header_StartTaskDSP */
 /**
@@ -657,12 +682,202 @@ void StartTaskTemp(void *argument)
 void StartTaskDSP(void *argument)
 {
   /* USER CODE BEGIN StartTaskDSP */
+
+	  /* Filtres PPG */
+	  static BandpassFilter_t ppg_filter_ir;
+	  static BandpassFilter_t ppg_filter_red;
+	  PPG_Filter_Init(&ppg_filter_ir);
+	  PPG_Filter_Init(&ppg_filter_red);
+
+	  /* Filtres NLMS */
+	  static NLMS_Filter_t nlms_ir;
+	  static NLMS_Filter_t nlms_red;
+	  NLMS_Init(&nlms_ir,  0.01f);
+	  NLMS_Init(&nlms_red, 0.01f);
+
+	  /* Interpolation IMU */
+	  static IMU_Interp_t imu_interp;
+	  IMU_Interp_Init(&imu_interp);
+
+	  /* Buffers réception */
+	  MAX86141_Sample_t ppg_lot[64];
+	  IMU_Batch_t       imu_received;
+	  size_t            bytes_ppg = 0;
+	  size_t            bytes_imu = 0;
+
+	  /* Synchronisation */
+	  static uint8_t reject_next_imu = 0;
+
+	  /* Buffer circulaire PPG 20s */
+	  #define PPG_WINDOW_SIZE  8000
+	  static float    ppg_ir_buf[PPG_WINDOW_SIZE];
+	  static float    ppg_red_buf[PPG_WINDOW_SIZE];
+	  static uint16_t ppg_win_idx = 0;
+	  static uint32_t ppg_count   = 0;
+
+	  for(;;)
+	  {
+	    /* -------------------------------------------
+	     * ÉTAPE 1 — Attendre lot PPG (bloquant)
+	     * ------------------------------------------- */
+	    bytes_ppg = xStreamBufferReceive(
+	                    SB_PPG,
+	                    ppg_lot,
+	                    sizeof(ppg_lot),
+	                    portMAX_DELAY);
+
+
+
+	    /* -------------------------------------------
+	     * ÉTAPE 2 — Attendre IMU (20ms timeout)
+	     * ------------------------------------------- */
+	    bytes_imu = xStreamBufferReceive(
+	                    SB_IMU,
+	                    &imu_received,
+	                    sizeof(IMU_Batch_t),
+	                    pdMS_TO_TICKS(50));
+
+
+	    /* imu_ok  C'est un drapeau booléen simple.
+
+imu_ok = 1 → batch IMU reçu correctement ✓
+imu_ok = 0 → batch IMU absent ou incomplet ✗
+	      */
+
+	    uint8_t imu_ok = (bytes_imu == sizeof(IMU_Batch_t))
+	                     ? 1 : 0;
+
+	    /* -------------------------------------------
+	     * ÉTAPE 3 — Gérer synchronisation IMU/PPG
+	     * ------------------------------------------- */
+	    if (imu_ok && reject_next_imu == 1)
+	    {
+	        /* IMU désynchronisé → rejeter ce lot IMU
+	         * traiter PPG avec filtre passe-bande seul */
+	        reject_next_imu = 0;
+	        imu_ok = 0;
+	    }
+
+	    if (!imu_ok)
+	    {
+	        /* Pas d'IMU valide ce lot
+	         * → rejeter le prochain lot IMU aussi
+	         * → filtre passe-bande seulement         */
+	        reject_next_imu = 1;
+
+	        for (uint8_t p = 0; p < 64; p++)
+	        {
+	            float ir_f  = PPG_Filter_Apply(
+	                              &ppg_filter_ir,
+	                              (float)ppg_lot[p].ir);
+	            float red_f = PPG_Filter_Apply(
+	                              &ppg_filter_red,
+	                              (float)ppg_lot[p].red);
+
+	            ppg_ir_buf[ppg_win_idx]  = ir_f;
+	            ppg_red_buf[ppg_win_idx] = red_f;
+	            ppg_win_idx = (ppg_win_idx + 1)
+	                        % PPG_WINDOW_SIZE;
+	            ppg_count++;
+	        }
+	    }
+	    else
+	    {
+	        /* -------------------------------------------
+	         * ÉTAPE 4 — IMU synchronisé
+	         * Préparer interpolation + traiter PPG
+	         * ------------------------------------------- */
+	        IMU_Interp_SetBatch(&imu_interp,
+	                             &imu_received,
+	                             1);
+
+	        for (uint8_t p = 0; p < 64; p++)
+	        {
+
+
+
+	   /************************************************************************/
+	        	/*Pour chaque sample PPG :
+
+  1. IMU_Interp_GetMag() :
+     → trouve l'instant exact du sample PPG
+     → interpole entre deux slots IMU
+     → retourne magnitude en mg (ex: 1089mg)
+
+  2. IMU_Interp_Normalize() :
+     → centre autour de 0
+     → retourne valeur entre 0 et 1 (ex: 0.089)
+
+  3. NLMS_Apply() :
+     → utilise mag_norm pour corriger le PPG
+     → soustrait l'artefact de mouvement ✓*/
+
+	   /***********************************************************************/
+
+
+	            /* Interpoler magnitude IMU */
+
+	            float mag = IMU_Interp_GetMag(
+	                            &imu_interp,
+	                            ppg_lot[p].timestamp);
+
+	            /* Normaliser */
+	            float mag_norm = IMU_Interp_Normalize(mag);
+
+	            /* Filtrer PPG */
+	            float ir_f  = PPG_Filter_Apply(
+	                              &ppg_filter_ir,
+	                              (float)ppg_lot[p].ir);
+	            float red_f = PPG_Filter_Apply(
+	                              &ppg_filter_red,
+	                              (float)ppg_lot[p].red);
+
+	            /* Corriger avec NLMS */
+	            float ir_clean  = NLMS_Apply(&nlms_ir,
+	                                          ir_f,
+	                                          mag_norm);
+	            float red_clean = NLMS_Apply(&nlms_red,
+	                                          red_f,
+	                                          mag_norm);
+
+	            /* Stocker */
+	            ppg_ir_buf[ppg_win_idx]  = ir_clean;
+	            ppg_red_buf[ppg_win_idx] = red_clean;
+	            ppg_win_idx = (ppg_win_idx + 1)
+	                        % PPG_WINDOW_SIZE;
+	            ppg_count++;
+	        }
+	    }
+
+	    /* -------------------------------------------
+	     * ÉTAPE 5 — Features toutes les secondes
+	     * ------------------------------------------- */
+	    if ((ppg_count % 400 == 0) &&
+	        (ppg_count >= PPG_WINDOW_SIZE))
+	    {
+	        /* calculer les 7 features PPG */
+	    }
+	  }
+
+
+  /* USER CODE END StartTaskDSP */
+}
+/* USER CODE BEGIN Header_StartTempProcess */
+/**
+* @brief Function implementing the TempProcessTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTempProcess */
+void StartTempProcess(void *argument)
+{
+  /* USER CODE BEGIN StartTempProcess */
   /* Infinite loop */
   for(;;)
   {
     osDelay(1);
   }
-  /* USER CODE END StartTaskDSP */
+  /* USER CODE END StartTempProcess */
 }
 
 /* Private application code --------------------------------------------------*/

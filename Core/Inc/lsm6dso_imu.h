@@ -22,12 +22,33 @@ typedef struct {
 
 
 /*********** structure pour IMU *********/
+/* Ancien type — gardé pour les features IA */
 typedef struct {
     float accel_mg[3];   /* [0]=X [1]=Y [2]=Z en mg */
     float gyro_mdps[3];  /* [0]=X [1]=Y [2]=Z en mdps */
     uint32_t timestamp;  /* TIM2 en µs */
 } IMU_Sample_t;
 /**********************************************/
+
+
+
+
+
+
+/* Nouveau type — slot brut pour correction PPG */
+typedef struct {
+    float    accel_mg[3];   /* ax, ay, az en mg  */
+    uint32_t timestamp;     /* µs via TIM2       */
+} IMU_Raw_t;                /* 16 octets         */
+
+
+
+typedef struct {
+    IMU_Raw_t slots[17];  /* 17× 16 = 272 octets */
+    uint8_t   count;      /* nombre de slots valides */
+} IMU_Batch_t;            /* 161 octets total */
+
+
 
 /* Fonctions publiques */
 int32_t LSM6DSO_IMU_Init(SPI_HandleTypeDef *hspi,
@@ -39,6 +60,9 @@ int32_t  LSM6DSO_IMU_GetFIFOLevel(uint16_t *level);
 
 int32_t LSM6DSO_IMU_ReadSample(LSM6DSO_Sample_t *sample);
 int32_t LSM6DSO_IMU_ReadFIFO(IMU_Sample_t *sample) ;
+int32_t LSM6DSO_IMU_ReadFIFO_Raw(IMU_Raw_t *slots,
+                                   uint8_t   *count_out,
+                                   uint32_t   isr_timestamp);
 
 /* Contexte global (accessible pour vTaskIMUAcq) */
 extern stmdev_ctx_t lsm6dso_ctx;

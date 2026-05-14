@@ -107,7 +107,7 @@ Fatigue detection results and vital signs are transmitted wirelessly to an **adm
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 | Layer | Technologies |
 |-------|-------------|
@@ -163,7 +163,7 @@ fatigue-detection-edge-ai/
 Embedded Systems Engineering Student — ENICarthage  
 ---
 
-## 🎓 Academic Context
+## Academic Context
 
 - **Institution:** École Nationale d'Ingénieurs de Carthage (ENICarthage), Tunisia
 - **Research Partner:** Luleå University of Technology (LTU), Sweden

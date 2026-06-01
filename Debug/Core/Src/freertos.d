@@ -57,7 +57,9 @@ Core/Src/freertos.o: ../Core/Src/freertos.c \
  ../Drivers/BSP/Components/lsm6dso/lsm6dso_reg.h ../Core/Inc/tmp117.h \
  ../Core/Inc/i2c.h ../Core/Inc/shtc3.h ../Core/Inc/ppg_filter.h \
  ../Core/Inc/nlms_filter.h ../Core/Inc/imu_interpolation.h \
- ../Core/Inc/lsm6dso_imu.h
+ ../Core/Inc/lsm6dso_imu.h ../Core/Inc/ppg_features.h \
+ ../Core/Inc/emg_filter.h ../Core/Inc/ppg_filter.h \
+ ../Core/Inc/emg_features.h ../Core/Inc/temp_features.h
 ../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h:
 ../Core/Inc/FreeRTOSConfig.h:
 ../Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h:
@@ -124,3 +126,8 @@ Core/Src/freertos.o: ../Core/Src/freertos.c \
 ../Core/Inc/nlms_filter.h:
 ../Core/Inc/imu_interpolation.h:
 ../Core/Inc/lsm6dso_imu.h:
+../Core/Inc/ppg_features.h:
+../Core/Inc/emg_filter.h:
+../Core/Inc/ppg_filter.h:
+../Core/Inc/emg_features.h:
+../Core/Inc/temp_features.h:

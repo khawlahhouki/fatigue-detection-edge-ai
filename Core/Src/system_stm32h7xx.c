@@ -179,7 +179,12 @@
   */
 void SystemInit (void)
 {
+
+#ifdef RENODE_SIMULATION
+  return;
+#endif
 #if defined (DATA_IN_D2_SRAM)
+	return;
  __IO uint32_t tmpreg;
 #endif /* DATA_IN_D2_SRAM */
 

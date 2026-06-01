@@ -1,0 +1,13 @@
+../Core/Src/ppg_features.c:19:14:calc_mean	3
+../Core/Src/ppg_features.c:30:14:calc_variance	3
+../Core/Src/ppg_features.c:46:14:calc_std	1
+../Core/Src/ppg_features.c:54:9:PPG_DetectPeaks	15
+../Core/Src/ppg_features.c:122:9:PPG_CalcRR	7
+../Core/Src/ppg_features.c:159:7:PPG_CalcBPM	6
+../Core/Src/ppg_features.c:182:7:PPG_CalcSDNN	3
+../Core/Src/ppg_features.c:196:7:PPG_CalcRMSSD	4
+../Core/Src/ppg_features.c:218:7:PPG_CalcPNN50	5
+../Core/Src/ppg_features.c:240:7:PPG_CalcLFHF	12
+../Core/Src/ppg_features.c:297:7:PPG_CalcSpO2	14
+../Core/Src/ppg_features.c:350:7:PPG_CalcAmplitude	6
+../Core/Src/ppg_features.c:369:7:PPG_CalcSkewness	8

@@ -36,11 +36,61 @@
 #include "ppg_filter.h"
 #include "nlms_filter.h"
 #include "imu_interpolation.h"
+#include "ppg_features.h"
+#include "emg_filter.h"
+#include "emg_features.h"
+#include "temp_features.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct {
+    uint32_t t_ref;
+    uint16_t ppg_win_idx;
+    uint32_t ppg_count;
+} PPG_Notify_t;
 
+
+typedef struct {
+
+    /* --- PPG : 8 features --- */
+    float ppg_bpm;          /* Fréquence cardiaque (bpm)          */
+    float ppg_sdnn;         /* Écart-type intervalles R-R (ms)    */
+    float ppg_rmssd;        /* Racine carrée diff. R-R (ms)       */
+    float ppg_pnn50;        /* Proportion écarts R-R > 50ms (%)   */
+    float ppg_lf_hf;        /* Ratio puissances LF/HF             */
+    float ppg_spo2;         /* Saturation oxygène (%)             */
+    float ppg_amplitude;    /* Amplitude crête-à-crête moyenne    */
+    float ppg_skewness;     /* Asymétrie du signal                */
+
+    /* --- IMU : 4 features --- */
+    float imu_rms_accel;    /* RMS accélération (mg)              */
+    float imu_variance;     /* Variance accélération              */
+    float imu_peaks;        /* Nombre pics mouvement / seconde    */
+    float imu_rms_gyro;     /* RMS gyroscope (dps)                */
+
+    /* --- EMG : 8 features --- */
+    float emg_rms_ch1;      /* RMS canal 1                        */
+    float emg_rms_ch2;      /* RMS canal 2                        */
+    float emg_mav_ch1;      /* Mean Absolute Value canal 1        */
+    float emg_mav_ch2;      /* Mean Absolute Value canal 2        */
+    float emg_iemg_ch1;     /* Intégrale EMG canal 1              */
+    float emg_iemg_ch2;     /* Intégrale EMG canal 2              */
+    float emg_mdf;          /* Fréquence médiane (Hz)             */
+    float emg_mnf;          /* Fréquence moyenne (Hz)             */
+
+    /* --- Température : 4 features --- */
+    float temp_mean;        /* Température peau moyenne (°C)      */
+    float temp_delta;       /* Écart peau - ambiante (°C)         */
+    float temp_drift;       /* Dérive temporelle (°C/s)           */
+    float temp_variance;    /* Variance température               */
+
+    /* --- Métadonnées --- */
+    uint32_t t_ref;         /* Ancre temporelle de cette fenêtre  */
+    uint32_t ppg_count;     /* Compteur total samples PPG         */
+
+} FeatureVector_t;
+/* sizeof(FeatureVector_t) = 24×4 + 4 + 4 = 104 octets         */
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -91,11 +141,31 @@ extern TIM_HandleTypeDef  htim2;
 /* ajouté pour la tache IMU */
 
 
+/* Buffer circulaire PPG 20s */
+#define PPG_WINDOW_SIZE  8000
+static float    ppg_ir_buf[PPG_WINDOW_SIZE];
+static float    ppg_red_buf[PPG_WINDOW_SIZE];
+
+	  /*  tourne en cercle de 0 à 7999. Quand il atteint 8000 il revient à 0
+	  c'est le buffer circulaire. Les 8000 derniers samples (= 20 s à 400 Hz) sont toujours disponibles */
+
+/* Buffers EMG partages entre vTaskEMGProcess et TaskFeatures */
+/* Buffer EMG 2 secondes = 1000 samples @ 500Hz */
 
 
+float    emg_ch1_buf[EMG_BUF_SIZE];
+float    emg_ch2_buf[EMG_BUF_SIZE];
+uint32_t emg_ts_buf[EMG_BUF_SIZE];   /* timestamp chaque sample */
+uint16_t emg_buf_idx   = 0;
+uint8_t  emg_buf_ready = 0;          /* 1 = 2s de données disponibles */
 
-
-
+/* Buffers temperature partages entre StartTempProcess et TaskFeatures */
+/* 79 samples = 31s x 2.54Hz                                            */
+float    temp_skin_buf[TEMP_BUF_SIZE];     /* temperature peau (C)      */
+float    temp_ambient_buf[TEMP_BUF_SIZE];  /* temperature ambiante (C)  */
+uint32_t temp_ts_buf[TEMP_BUF_SIZE];       /* timestamp chaque sample   */
+uint8_t  temp_buf_idx   = 0;              /* index ecriture courant     */
+uint8_t  temp_buf_ready = 0;              /* 1 = 31s de donnees         */
 /* USER CODE END Variables */
 /* Definitions for vTaskEMGAcq */
 osThreadId_t vTaskEMGAcqHandle;
@@ -139,6 +209,20 @@ const osThreadAttr_t TempProcessTask_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for TaskFeatures */
+osThreadId_t TaskFeaturesHandle;
+const osThreadAttr_t TaskFeatures_attributes = {
+  .name = "TaskFeatures",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for vTaskEMGProcess */
+osThreadId_t vTaskEMGProcessHandle;
+const osThreadAttr_t vTaskEMGProcess_attributes = {
+  .name = "vTaskEMGProcess",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* Definitions for Q_TEMP */
 osMessageQueueId_t Q_TEMPHandle;
 const osMessageQueueAttr_t Q_TEMP_attributes = {
@@ -149,6 +233,11 @@ osMessageQueueId_t Q_RESULTSHandle;
 const osMessageQueueAttr_t Q_RESULTS_attributes = {
   .name = "Q_RESULTS"
 };
+/* Definitions for Q_FEATURES */
+osMessageQueueId_t Q_FEATURESHandle;
+const osMessageQueueAttr_t Q_FEATURES_attributes = {
+  .name = "Q_FEATURES"
+};
 /* Definitions for MTX_SPI2 */
 osMutexId_t MTX_SPI2Handle;
 const osMutexAttr_t MTX_SPI2_attributes = {
@@ -158,6 +247,16 @@ const osMutexAttr_t MTX_SPI2_attributes = {
 osMutexId_t MTX_I2C1Handle;
 const osMutexAttr_t MTX_I2C1_attributes = {
   .name = "MTX_I2C1"
+};
+/* Definitions for MTX_PPG_BUF */
+osMutexId_t MTX_PPG_BUFHandle;
+const osMutexAttr_t MTX_PPG_BUF_attributes = {
+  .name = "MTX_PPG_BUF"
+};
+/* Definitions for MTX_EMG_BUF */
+osMutexId_t MTX_EMG_BUFHandle;
+const osMutexAttr_t MTX_EMG_BUF_attributes = {
+  .name = "MTX_EMG_BUF"
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -171,6 +270,8 @@ void StartTaskIMU(void *argument);
 void StartTaskTemp(void *argument);
 void StartTaskDSP(void *argument);
 void StartTempProcess(void *argument);
+void StartTaskFeatures(void *argument);
+void StartTaskEMGProcess(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -189,6 +290,12 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of MTX_I2C1 */
   MTX_I2C1Handle = osMutexNew(&MTX_I2C1_attributes);
+
+  /* creation of MTX_PPG_BUF */
+  MTX_PPG_BUFHandle = osMutexNew(&MTX_PPG_BUF_attributes);
+
+  /* creation of MTX_EMG_BUF */
+  MTX_EMG_BUFHandle = osMutexNew(&MTX_EMG_BUF_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -209,6 +316,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of Q_RESULTS */
   Q_RESULTSHandle = osMessageQueueNew (20, 64, &Q_RESULTS_attributes);
+
+  /* creation of Q_FEATURES */
+  Q_FEATURESHandle = osMessageQueueNew (1, 10, &Q_FEATURES_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -233,6 +343,12 @@ void MX_FREERTOS_Init(void) {
   /* creation of TempProcessTask */
   TempProcessTaskHandle = osThreadNew(StartTempProcess, NULL, &TempProcessTask_attributes);
 
+  /* creation of TaskFeatures */
+  TaskFeaturesHandle = osThreadNew(StartTaskFeatures, NULL, &TaskFeatures_attributes);
+
+  /* creation of vTaskEMGProcess */
+  vTaskEMGProcessHandle = osThreadNew(StartTaskEMGProcess, NULL, &vTaskEMGProcess_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -247,9 +363,11 @@ void MX_FREERTOS_Init(void) {
   );
 
 
-  /* SB_EMG et SB_IMU — trigger = 1 octet pour l'instant
-     on ajustera quand vTaskDSP sera codé */
-  SB_EMG = xStreamBufferCreate(512, 1);
+
+  SB_EMG = xStreamBufferCreate(
+      128 * sizeof(ADS1292R_Sample_t),
+      sizeof(ADS1292R_Sample_t)
+  );
 
   SB_IMU = xStreamBufferCreate(
       4 * sizeof(IMU_Batch_t),   /*  4 × 273 = 1092 octets */
@@ -279,9 +397,9 @@ void StartTaskEMG(void *argument)
 	  uint32_t trigger_time_emg = 0;
 
 	  // 1. Initialisation et démarrage du flux continu (RDATAC)
-	  if(xSemaphoreTake(MTX_SPI2Handle, portMAX_DELAY) == pdTRUE) {
+	  if(osMutexAcquire(MTX_SPI2Handle, 100) == osOK){
 	      ADS1292R_ADCStartNormal();
-	      xSemaphoreGive(MTX_SPI2Handle);
+	      osMutexRelease(MTX_SPI2Handle);
  }
 
   for(;;)
@@ -289,17 +407,28 @@ void StartTaskEMG(void *argument)
 
 	    // 2. Attendre l'interruption DRDY (PE12)
 	    // Timeout 10ms (à 1000Hz, DRDY arrive toutes les 1ms)
-	    if(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10)) > 0)
+#ifdef RENODE_SIMULATION
+vTaskDelay(pdMS_TO_TICKS(10));
+if(1)
+#else
+if(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10)) > 0)
+#endif
+
 	    {
 	      // 3. Capturer le timestamp immédiat pris dans l'ISR
 	      trigger_time_emg = emg_isr_timestamp;
 
 	      // 4. Prendre le Mutex SPI2 (priorité haute pour ne pas rater le sample)
-	      if(xSemaphoreTake(MTX_SPI2Handle, pdMS_TO_TICKS(1)) == pdTRUE)
+#ifdef RENODE_SIMULATION
+if(osMutexAcquire(MTX_SPI2Handle, 5000) == osOK)  // 5 secondes
+#else
+if(osMutexAcquire(MTX_SPI2Handle, 100) == osOK)   // 100ms normal
+#endif
+
 	      {
 	        // 5. Lire les 9 octets (Polling rapide)
 	        ADS1292R_GetValue();
-	        xSemaphoreGive(MTX_SPI2Handle);
+	        osMutexRelease(MTX_SPI2Handle);
 
 	        // 6. Décoder les données brutes
 	        ADS1292R_Decode(ADS1292R_data_buf, &emg_sample, trigger_time_emg);
@@ -347,9 +476,27 @@ void StartTaskPPG(void *argument)
 	 *   - 64 paires * 3 octets RED = 192 octets
 	 *   - Total données            = 384 octets
 	 * --------------------------------------------------------------- */
+	/*****************************************************************************
+	Dit au compilateur :
+	  "Place cette variable dans la section
+	   .dma_buffers du linker script"
 
-	  static uint8_t ppg_dummy_tx[1 + MAX86141_FIFO_MAX_SAMPLES * 6];
-	  static uint8_t ppg_rx_buf [1 + MAX86141_FIFO_MAX_SAMPLES * 6];
+	Le linker script dit :
+	  .dma_buffers → RAM_CD (AHB-SRAM)
+
+	→ ppg_dummy_tx et ppg_rx_buf
+	  seront placés en RAM_CD ✓
+	  ******************************************************************/
+
+	static uint8_t ppg_dummy_tx[1 + MAX86141_FIFO_MAX_SAMPLES * 6]
+	    __attribute__((section(".dma_buffers"), aligned(32)));
+
+	static uint8_t ppg_rx_buf[1 + MAX86141_FIFO_MAX_SAMPLES * 6]
+	    __attribute__((section(".dma_buffers"), aligned(32)));
+
+
+
+
 
 	  MAX86141_Sample_t samples[MAX86141_FIFO_MAX_SAMPLES];
 	  uint8_t count = 0;
@@ -360,11 +507,12 @@ void StartTaskPPG(void *argument)
 	  uint32_t trigger_time = 0;
 
 
-	  if(xSemaphoreTake(MTX_SPI2Handle,  portMAX_DELAY) == pdTRUE)
+	  if(osMutexAcquire(MTX_SPI2Handle, 100) == osOK)
 	   {
 	       // Commande pour sortir du mode Shutdown (0x00 = Actif)
 	       MAX86141_WriteReg(&hspi2, CS_PPG_GPIO_Port, CS_PPG_Pin, MAX86141_REG_SYS_CTRL, 0x00);
-	       xSemaphoreGive(MTX_SPI2Handle);
+	       osMutexRelease(MTX_SPI2Handle);
+
 	   }
 
 
@@ -373,10 +521,15 @@ void StartTaskPPG(void *argument)
 	    /* Étape 1 — dormir maximum 150ms jusqu'à notification ISR PE11
 	     * il faut 160ms pour perdre un fifo de 64 samples donc en a choisir de se bloquer au maximum 150ms */
 
-		  if(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(150)) > 0)
+#ifdef RENODE_SIMULATION
+vTaskDelay(pdMS_TO_TICKS(10));
+if(1)
+#else
+if(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(150)) > 0)
+#endif
 	    {
 	    /* Étape 2 — prendre le mutex SPI2 */
-	    if(xSemaphoreTake(MTX_SPI2Handle, pdMS_TO_TICKS(2)) == pdTRUE)
+	    if(osMutexAcquire(MTX_SPI2Handle, 100) == osOK)
 	    {
 	    	/*
 	    	   * On ne lit plus le TIM2 ici !
@@ -397,12 +550,45 @@ void StartTaskPPG(void *argument)
 	                                     ppg_rx_buf,
 	                                     count * 6 + 1);
 
+
 	        /* Attendre DMA — Sémaphore binaire SÉPARÉ */
-	              xSemaphoreTake(sem_dma_ppg, pdMS_TO_TICKS(50));
+	        /* Qui donne le sémaphore ?
+  → HAL_SPI_TxRxCpltCallback()
+  → appelée quand DMA termine le transfert  */
+
+
+				xSemaphoreTake(sem_dma_ppg, pdMS_TO_TICKS(50));
+
+
+
+	              /* -------------------------------------------------------
+	               * Invalider le cache CPU pour ppg_rx_buf
+	               *
+	               * Problème sans cette ligne :
+	               *   Le DMA écrit les données SPI directement
+	               *   en RAM (AHB-SRAM) sans passer par le cache.
+	               *   Le cache CPU contient encore l'ancienne valeur.
+	               *   → CPU lirait de vieilles données ✗
+	               *
+	               * Cette ligne dit au cache :
+	               *   "Oublie ce que tu as pour ppg_rx_buf"
+	               *   → prochain accès CPU relit depuis RAM ✓
+	               *   → CPU lit les vraies données DMA ✓
+	               *
+	               * Doit être appelée APRÈS xSemaphoreTake
+	               * = après que le DMA a terminé son transfert
+	               * ------------------------------------------------------- */
+
+	              SCB_InvalidateDCache_by_Addr(
+	              	            (uint32_t *)ppg_rx_buf,
+	              	            sizeof(ppg_rx_buf));
 	      }
 
 	      /* Étape 6 — libérer le mutex */
-	      xSemaphoreGive(MTX_SPI2Handle);
+
+	      osMutexRelease(MTX_SPI2Handle);
+
+
 
 	      /* Étape 7 — décoder et envoyer dans SB_PPG */
 	     /*C'est pour l'efficacité (optimisation) :
@@ -444,10 +630,10 @@ void StartTaskIMU(void *argument)
 	IMU_Batch_t batch ;
 
 
-	if (xSemaphoreTake(MTX_SPI2Handle, pdMS_TO_TICKS(100)) == pdTRUE)
+	if (osMutexAcquire(MTX_SPI2Handle, 100) == osOK)
 	  {
 	      LSM6DSO_IMU_Start();
-	      xSemaphoreGive(MTX_SPI2Handle);
+	      osMutexRelease(MTX_SPI2Handle);
 	  }
 
 	  /* Imu_isr_timestamp déclaré dans freertos.c
@@ -475,7 +661,7 @@ void StartTaskIMU(void *argument)
 	      /* --- Prendre le mutex SPI2
 	       * SPI2 partagé entre MAX86141, ADS1292R, LSM6DSO
 	       * Timeout 50ms : bus occupé → on abandonne      */
-	      if (xSemaphoreTake(MTX_SPI2Handle, pdMS_TO_TICKS(50)) == pdTRUE)
+	      if (osMutexAcquire(MTX_SPI2Handle, 100) == osOK)
 	      {
 	    	   /* -----------------------------------------------
 	    	         * Lire les slots bruts du FIFO LSM6DSO
@@ -500,7 +686,7 @@ void StartTaskIMU(void *argument)
 	    	                           sample_timestamp);
 
 	        /* --- Libérer le mutex dès que la lecture est terminée */
-	        xSemaphoreGive(MTX_SPI2Handle);
+	    	  osMutexRelease(MTX_SPI2Handle);
 
 	        /* --- Appliquer le timestamp ISR et envoyer --- */
 	        if (ret == LSM6DSO_IMU_OK && SB_IMU != NULL)
@@ -586,7 +772,7 @@ void StartTaskTemp(void *argument)
 	     * 124ms sans utiliser le bus I2C.
 	     * Timeout 100ms : I2C1 normalement jamais occupé longtemps.
 	     * ----------------------------------------------------------- */
-	    if (xSemaphoreTake(MTX_I2C1Handle, pdMS_TO_TICKS(100)) == pdTRUE)
+	    if (osMutexAcquire(MTX_I2C1Handle, 100) == osOK)
 	    {
 
 	    	/* Lancer TMP117 One-Shot */
@@ -595,7 +781,7 @@ void StartTaskTemp(void *argument)
 	    	/* Lancer SHTC3 pendant la même fenêtre */
 	    	shtc3_wakeup(&hi2c1);
 
-	    	xSemaphoreGive(MTX_I2C1Handle);
+	    	osMutexRelease(MTX_I2C1Handle);
 	    	osDelay(1);  /* attendre 240µs SHTC3 wakeup */
 
 	    	/* Les deux capteurs "travaillent" maintenant */
@@ -604,7 +790,7 @@ void StartTaskTemp(void *argument)
 
 	    	osDelay(129); /* attendre fin TMP117 (130ms - 1ms déjà attendu) */
 	    	tmp117_timestamp = __HAL_TIM_GET_COUNTER(&htim2);
-	    	if (xSemaphoreTake(MTX_I2C1Handle, pdMS_TO_TICKS(100)) == pdTRUE)
+	    	if (osMutexAcquire(MTX_I2C1Handle, 100) == osOK)
 	    	{
 	    	    /* Lire TMP117 */
 
@@ -619,7 +805,7 @@ void StartTaskTemp(void *argument)
 	    	    shtc3_timestamp = __HAL_TIM_GET_COUNTER(&htim2);
 
 	    	    shtc3_sleep(&hi2c1);
-	    	    xSemaphoreGive(MTX_I2C1Handle);
+	    	    osMutexRelease(MTX_I2C1Handle);
 	    	}
 
 
@@ -695,6 +881,9 @@ void StartTaskDSP(void *argument)
 	  NLMS_Init(&nlms_ir,  0.01f);
 	  NLMS_Init(&nlms_red, 0.01f);
 
+ /* 0.01f c'est µ — le pas d'apprentissage. Les deux canaux démarrent avec w=0.
+  * Ils convergeront indépendamment vers leur propre valeur de w.*/
+
 	  /* Interpolation IMU */
 	  static IMU_Interp_t imu_interp;
 	  IMU_Interp_Init(&imu_interp);
@@ -708,12 +897,14 @@ void StartTaskDSP(void *argument)
 	  /* Synchronisation */
 	  static uint8_t reject_next_imu = 0;
 
-	  /* Buffer circulaire PPG 20s */
-	  #define PPG_WINDOW_SIZE  8000
-	  static float    ppg_ir_buf[PPG_WINDOW_SIZE];
-	  static float    ppg_red_buf[PPG_WINDOW_SIZE];
+
+
 	  static uint16_t ppg_win_idx = 0;
+
 	  static uint32_t ppg_count   = 0;
+
+	  static uint8_t features_armed = 0;
+	  static uint32_t last_ppg_timestamp = 0;
 
 	  for(;;)
 	  {
@@ -746,7 +937,20 @@ imu_ok = 0 → batch IMU absent ou incomplet ✗
 
 	    uint8_t imu_ok = (bytes_imu == sizeof(IMU_Batch_t))
 	                     ? 1 : 0;
-
+	    /* -----------------------------------------------------
+	            * ÉTAPE 3 — GESTION DE LA SYNCHRONISATION IMU/PPG
+	            *
+	            * CONDITION 1 : Détection du batch IMU décalé
+	            *
+	            * Scénario : au tour N l'IMU manquait → reject_next_imu
+	            * a été posé à 1. Au tour N+1 un batch IMU arrive —
+	            * mais il correspond à la période N, pas N+1.
+	            * L'utiliser corrigerait le PPG[N+1] avec le mouvement
+	            * de N → signal encore plus bruité que sans correction.
+	            *
+	            * Action : on invalide ce batch (imu_ok = 0) et on
+	            * efface le drapeau (reject_next_imu = 0).
+	            * ----------------------------------------------------- */
 	    /* -------------------------------------------
 	     * ÉTAPE 3 — Gérer synchronisation IMU/PPG
 	     * ------------------------------------------- */
@@ -757,6 +961,24 @@ imu_ok = 0 → batch IMU absent ou incomplet ✗
 	        reject_next_imu = 0;
 	        imu_ok = 0;
 	    }
+
+	    /* -----------------------------------------------------
+	             * CONDITION 2 : Traitement sans IMU valide
+	             *
+	             * Déclenché si :
+	             *   - L'IMU était absent ce tour (timeout)
+	             *   - OU la condition 1 vient d'invalider le batch IMU
+	             *
+	             * Dans ce cas :
+	             *   1. On pose reject_next_imu = 1 pour prévenir le
+	             *      tour suivant que son IMU sera décalé
+	             *   2. On traite les 64 samples PPG avec le filtre
+	             *      Butterworth seul (sans NLMS)
+	             *
+	             * Le signal résultant est moins propre (artefacts de
+	             * mouvement non corrigés) mais il est correct — mieux
+	             * vaut pas de correction que une mauvaise correction.*/
+
 
 	    if (!imu_ok)
 	    {
@@ -774,14 +996,61 @@ imu_ok = 0 → batch IMU absent ou incomplet ✗
 	                              &ppg_filter_red,
 	                              (float)ppg_lot[p].red);
 
-	            ppg_ir_buf[ppg_win_idx]  = ir_f;
-	            ppg_red_buf[ppg_win_idx] = red_f;
-	            ppg_win_idx = (ppg_win_idx + 1)
-	                        % PPG_WINDOW_SIZE;
-	            ppg_count++;
-	        }
-	    }
+	            if (osMutexAcquire(MTX_PPG_BUFHandle,
+	                                               5) == osOK)
+	                            {
+	                                ppg_ir_buf[ppg_win_idx]  = ir_f;
+	                                ppg_red_buf[ppg_win_idx] = red_f;
+	                                osMutexRelease(MTX_PPG_BUFHandle);
+	                            }
+
+	                            ppg_win_idx = (ppg_win_idx + 1) % PPG_WINDOW_SIZE;
+	                            ppg_count++;
+	                            /* Sauvegarder le timestamp de ce sample */
+	                                           last_ppg_timestamp = ppg_lot[p].timestamp;
+
+	                                           /* ----------------------------------------
+	                                            * ARMEMENT + NOTIFICATION (même logique
+	                                            * que dans le else — dupliquée ici car
+	                                            * ppg_count s'incrémente dans les deux
+	                                            * boucles indépendamment)
+	                                            * ---------------------------------------- */
+	                                           if (!features_armed &&
+	                                               ppg_count >= PPG_WINDOW_SIZE)
+	                                           {
+	                                               features_armed = 1;
+	                                           }
+
+	                                           if (features_armed &&
+	                                               (ppg_count % 400 == 0))
+	                                           {
+	                                               PPG_Notify_t notif;
+	                                               notif.t_ref       = last_ppg_timestamp;
+	                                               notif.ppg_win_idx = ppg_win_idx;
+	                                               notif.ppg_count   = ppg_count;
+
+	                                               osMessageQueueReset(Q_FEATURESHandle);
+	                                               osMessageQueuePut(Q_FEATURESHandle,
+	                                                                 &notif, 0, 0);
+	                                           }
+	                                       }
+	                                   }
+
+
 	    else
+	    	 /* -----------------------------------------------------
+	    	             * ÉTAPE 4 — IMU SYNCHRONISÉ : TRAITEMENT COMPLET
+	    	             *
+	    	             * On a un batch IMU valide correspondant à cette
+	    	             * période PPG. On peut appliquer la correction
+	    	             * complète : Butterworth + NLMS.
+	    	             *
+	    	             * IMU_Interp_SetBatch prépare le tableau imu_pts[]
+	    	             * pour l'interpolation :
+	    	             *   [0]     = dernier slot du batch précédent
+	    	             *             (pont de continuité temporelle)
+	    	             *   [1..16] = slots du batch courant
+	    	             * ----------------------------------------------------- */
 	    {
 	        /* -------------------------------------------
 	         * ÉTAPE 4 — IMU synchronisé
@@ -841,27 +1110,55 @@ imu_ok = 0 → batch IMU absent ou incomplet ✗
 	                                          mag_norm);
 
 	            /* Stocker */
-	            ppg_ir_buf[ppg_win_idx]  = ir_clean;
-	            ppg_red_buf[ppg_win_idx] = red_clean;
-	            ppg_win_idx = (ppg_win_idx + 1)
-	                        % PPG_WINDOW_SIZE;
-	            ppg_count++;
-	        }
-	    }
+	            /* Op.5 : écriture dans buffer partagé
+	                             * protégé par MTX_PPG_BUFHandle              */
+	      if (osMutexAcquire(MTX_PPG_BUFHandle,5) == osOK)
+	                            {
+	                                ppg_ir_buf[ppg_win_idx]  = ir_clean;
+	                                ppg_red_buf[ppg_win_idx] = red_clean;
+	                                osMutexRelease(MTX_PPG_BUFHandle);
+	                            }
 
-	    /* -------------------------------------------
-	     * ÉTAPE 5 — Features toutes les secondes
-	     * ------------------------------------------- */
-	    if ((ppg_count % 400 == 0) &&
-	        (ppg_count >= PPG_WINDOW_SIZE))
-	    {
-	        /* calculer les 7 features PPG */
-	    }
-	  }
+	                            ppg_win_idx = (ppg_win_idx + 1) % PPG_WINDOW_SIZE;
+	                            ppg_count++;
+
+	                            /* Sauvegarder le timestamp de ce sample */
+	                            last_ppg_timestamp = ppg_lot[p].timestamp;
+
+	                            /* ----------------------------------------
+	                             * ARMEMENT + NOTIFICATION
+	                             * ---------------------------------------- */
+	                            if (!features_armed &&
+	                                ppg_count >= PPG_WINDOW_SIZE)
+	                            {
+	                                features_armed = 1;
+	                            }
+
+	                            if (features_armed &&
+	                                (ppg_count % 400 == 0))
+	                            {
+	                                PPG_Notify_t notif;
+	                                notif.t_ref       = last_ppg_timestamp;
+	                                notif.ppg_win_idx = ppg_win_idx;
+	                                notif.ppg_count   = ppg_count;
+
+	                                osMessageQueueReset(Q_FEATURESHandle);
+	                                osMessageQueuePut(Q_FEATURESHandle,
+	                                                  &notif, 0, 0);
+	                            }
+	                        }
+	                    }
+
+	                }
+
+
+
+
 
 
   /* USER CODE END StartTaskDSP */
 }
+
 /* USER CODE BEGIN Header_StartTempProcess */
 /**
 * @brief Function implementing the TempProcessTask thread.
@@ -872,12 +1169,579 @@ imu_ok = 0 → batch IMU absent ou incomplet ✗
 void StartTempProcess(void *argument)
 {
   /* USER CODE BEGIN StartTempProcess */
-  /* Infinite loop */
+  /* Recevoir samples temperature depuis Q_TEMP
+   * Stocker dans buffer 31s ordonne chronologiquement
+   * memmove garantit ordre chronologique comme EMG     */
+  Temp_Sample_t ts;
+
   for(;;)
   {
-    osDelay(1);
+    /* 1. Attendre sample depuis StartTaskTemp */
+    if(osMessageQueueGet(Q_TEMPHandle,
+                         &ts,
+                         NULL,
+                         osWaitForever) != osOK)
+    {
+      continue;
+    }
+
+    /* 2. Stocker dans buffer partage */
+    temp_skin_buf[temp_buf_idx]    = ts.temp_skin_c;
+    temp_ambient_buf[temp_buf_idx] = ts.temp_ambient_c;
+    temp_ts_buf[temp_buf_idx]      = ts.timestamptemp117;
+    temp_buf_idx++;
+
+    /* 3. Buffer plein apres 79 samples = 31s */
+    if(temp_buf_idx >= TEMP_BUF_SIZE)
+    {
+      /* memmove : decaler 3 samples anciens
+       * garder les 76 derniers dans l ordre */
+      memmove(&temp_skin_buf[0],
+              &temp_skin_buf[3],
+              76 * sizeof(float));
+      memmove(&temp_ambient_buf[0],
+              &temp_ambient_buf[3],
+              76 * sizeof(float));
+      memmove(&temp_ts_buf[0],
+              &temp_ts_buf[3],
+              76 * sizeof(uint32_t));
+      temp_buf_idx   = 76;
+      temp_buf_ready = 1;
+    }
   }
   /* USER CODE END StartTempProcess */
+}
+
+/* USER CODE BEGIN Header_StartTaskFeatures */
+/**
+* @brief Function implementing the TaskFeatures thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTaskFeatures */
+void StartTaskFeatures(void *argument)
+{
+  /* USER CODE BEGIN StartTaskFeatures */
+
+    /* ---------------------------------------------------------
+     * DÉCLARATION 1 — Structure de notification
+     *
+     * Reçoit les 10 octets envoyés par vTaskDSP via Q_FEATURESHandle.
+     * Contient 3 champs :
+     *   t_ref       : timestamp du dernier sample PPG traité
+     *                 = ancre temporelle pour les 4 fenêtres
+     *   ppg_win_idx : index du sample le plus ancien dans
+     *                 le buffer circulaire ppg_ir_buf[]
+     *   ppg_count   : total samples traités depuis démarrage
+     *                 utilisé pour vérifier que le buffer est plein
+     * --------------------------------------------------------- */
+    PPG_Notify_t notif;
+
+    /* ---------------------------------------------------------
+     * DÉCLARATION 2 — Vecteur des 24 features
+     *
+     * Structure de 104 octets (24 floats + 2 uint32_t) envoyée
+     * vers vTaskIA via Q_RESULTSHandle après calcul.
+     * Remise à zéro à chaque itération par memset.
+     * --------------------------------------------------------- */
+    FeatureVector_t fv;
+
+    /* ---------------------------------------------------------
+     * DÉCLARATION 3 — Structure intermédiaire R-R
+     *
+     * Stocke les résultats de PPG_DetectPeaks() et PPG_CalcRR().
+     * Partagée entre toutes les fonctions PPG_Calc* pour éviter
+     * de recalculer les pics plusieurs fois.
+     *
+     * Taille ≈ 420 octets → trop grand pour la stack (2Ko)
+     * static → placée en RAM globale (RAM_EXEC) au démarrage
+     * --------------------------------------------------------- */
+    static PPG_RR_t rr;
+
+    /* ---------------------------------------------------------
+     * DÉCLARATIONS 4, 5, 6, 7 — Buffers locaux PPG
+     *
+     * POURQUOI 4 BUFFERS ?
+     *   ppg_ir_buf[] (global) = buffer circulaire écrit par vTaskDSP.
+     *   Les données ne sont PAS dans l'ordre chronologique —
+     *   elles commencent à ppg_win_idx, pas à l'index 0.
+     *
+     *   local_ir_raw[] = copie brute de ppg_ir_buf (même désordre).
+     *   Nécessaire car on libère le mutex AVANT de trier.
+     *   Si on triait pendant le mutex → vTaskDSP bloqué ~0.43ms.
+     *
+     *   local_ir[] = données remises dans l'ordre chronologique.
+     *   local_ir[0]    = sample le plus ancien (t - 20s)
+     *   local_ir[7999] = sample le plus récent (t)
+     *   C'est sur ce buffer que PPG_Calc* travaillent.
+     *
+     * POURQUOI static ?
+     *   4 buffers × 8000 × 4 octets = 128 Ko total.
+     *   La stack de vTaskFeatures = 512 words = 2048 octets.
+     *   128 Ko >> 2 Ko → Stack Overflow → HardFault si non static.
+     *   Avec static → placés en RAM_EXEC au démarrage du système.
+     * --------------------------------------------------------- */
+    static float local_ir_raw[PPG_WINDOW_SIZE];   /* copie brute IR  */
+    static float local_red_raw[PPG_WINDOW_SIZE];  /* copie brute RED */
+    static float local_ir[PPG_WINDOW_SIZE];       /* IR chronologique  */
+    static float local_red[PPG_WINDOW_SIZE];      /* RED chronologique */
+
+    /* =========================================================
+     * BOUCLE INFINIE DE LA TÂCHE
+     * ========================================================= */
+    for(;;)
+    {
+        /* -----------------------------------------------------
+         * ÉTAPE 1 — ATTENDRE LA NOTIFICATION DE vTaskDSP
+         *
+         * osMessageQueueGet bloque la tâche jusqu'à réception.
+         *
+         * Paramètres :
+         *   Q_FEATURESHandle : handle de la queue (1 slot × 10o)
+         *   &notif           : ADRESSE de notif où écrire les
+         *                      10 octets reçus. Le & est
+         *                      obligatoire — sans lui on passerait
+         *                      la valeur de notif (vide) au lieu
+         *                      de l'adresse où écrire.
+         *   NULL             : on ne récupère pas la priorité du
+         *                      message (tous ont priorité 0)
+         *   osWaitForever    : attente infinie — la tâche dort
+         *                      et consomme 0% CPU jusqu'à
+         *                      réception. FreeRTOS exécute
+         *                      d'autres tâches pendant ce temps.
+         *
+         * Retour :
+         *   osOK          → message reçu, notif est rempli ✓
+         *   autre valeur  → erreur inattendue → on skip
+         * ----------------------------------------------------- */
+        if (osMessageQueueGet(Q_FEATURESHandle,
+                              &notif,
+                              NULL,
+                              osWaitForever) != osOK)
+        {
+            /* Ne devrait jamais arriver avec osWaitForever.
+             * Protection défensive contre un bug FreeRTOS.     */
+            continue;
+        }
+
+        /* -----------------------------------------------------
+         * ÉTAPE 2 — VÉRIFICATION VALIDITÉ DU BUFFER
+         *
+         * Normalement features_armed dans vTaskDSP empêche
+         * d'envoyer des notifications avant 8000 samples.
+         *
+         * Cette vérification est une protection défensive :
+         *   - Si ppg_count a été remis à 0 par un bug
+         *   - Si features_armed a été corrompu en mémoire
+         *   - Si le système a redémarré partiellement
+         *
+         * Les 8000 premiers samples (20s) contiennent des zéros.
+         * Calculer le BPM sur des zéros → résultat aberrant
+         * → modèle IA reçoit des données fausses → diagnostic faux.
+         *
+         * Coût : 1 comparaison = 1 cycle CPU. Négligeable.
+         * ----------------------------------------------------- */
+        if (notif.ppg_count < PPG_WINDOW_SIZE)
+        {
+            continue; /* buffer incomplet → skip cette notification */
+        }
+
+        /* -----------------------------------------------------
+         * ÉTAPE 3 — COPIE LOCALE DES BUFFERS PPG
+         *
+         * PROBLÈME : ppg_ir_buf[] est écrit en continu par
+         * vTaskDSP (400 samples/s). Si on lit pendant qu'il écrit
+         * → corruption de données → BPM faux.
+         *
+         * SOLUTION : mutex MTX_PPG_BUFHandle protège l'accès.
+         *
+         * TIMEOUT 10ms :
+         *   vTaskDSP tient ce mutex ~7 nanosecondes (2 écritures).
+         *   10ms = marge ×1 400 000 pour absorber les préemptions.
+         *   Si dépassé → anomalie système → skip cette seconde.
+         *   On NE MET PAS osWaitForever car si vTaskDSP a un bug
+         *   permanent et ne libère jamais le mutex, on préfère
+         *   skiper cette seconde plutôt que d'attendre indéfiniment.
+         *   (Pour les bugs permanents → watchdog hardware reset)
+         *
+         * Le memcpy copie 32Ko IR + 32Ko RED = 64Ko en ~0.03ms.
+         * On libère le mutex IMMÉDIATEMENT après le memcpy.
+         * Le tri chronologique se fait HORS mutex (~0.43ms).
+         * → vTaskDSP bloqué seulement 0.03ms sur 1000ms = 0.003%
+         * ----------------------------------------------------- */
+        if (osMutexAcquire(MTX_PPG_BUFHandle, 10) == osOK)
+        {
+            /* Copie brute — même disposition que le buffer circulaire.
+             * ppg_ir_buf est une variable globale accessible ici.
+             * memcpy(destination, source, taille_en_octets)         */
+            memcpy(local_ir_raw,
+                   ppg_ir_buf,
+                   PPG_WINDOW_SIZE * sizeof(float));
+
+            memcpy(local_red_raw,
+                   ppg_red_buf,
+                   PPG_WINDOW_SIZE * sizeof(float));
+
+            /* Libérer immédiatement → vTaskDSP peut reprendre     */
+            osMutexRelease(MTX_PPG_BUFHandle);
+        }
+        else
+        {
+            /* Mutex non disponible en 10ms → anomalie → skip.
+             * vTaskFeatures retourne attendre la prochaine
+             * notification dans 1 seconde.                         */
+            continue;
+        }
+
+        /* -----------------------------------------------------
+         * ÉTAPE 4 — RECONSTRUCTION ORDRE CHRONOLOGIQUE
+         *
+         * Le buffer circulaire ne commence pas à l'index 0.
+         * notif.ppg_win_idx = index du sample le plus ANCIEN.
+         *
+         * Exemple : ppg_win_idx = 2000
+         *   local_ir_raw[2000] = sample de t-20s (le plus ancien)
+         *   local_ir_raw[2001] = sample suivant
+         *   ...
+         *   local_ir_raw[7999] = sample du milieu
+         *   local_ir_raw[0]    = suite (après rebouclage)
+         *   ...
+         *   local_ir_raw[1999] = sample de t (le plus récent)
+         *
+         * Après reconstruction :
+         *   local_ir[0]    = plus ancien (t-20s) ← PPG_Calc commence ici
+         *   local_ir[7999] = plus récent (t)     ← PPG_Calc finit ici
+         *
+         * La formule (start + i) % PPG_WINDOW_SIZE gère le
+         * rebouclage automatiquement quelle que soit la valeur
+         * de ppg_win_idx.
+         *
+         * Durée : 8000 itérations × ~15 cycles ≈ 0.43ms
+         * Hors mutex → vTaskDSP non bloqué pendant ce temps.
+         *
+         * OPTIMISATION POSSIBLE (si besoin de performance) :
+         *   Remplacer la boucle par 2 memcpy sans modulo :
+         *   memcpy(local_ir, raw+start, (8000-start)*4);
+         *   memcpy(local_ir+(8000-start), raw, start*4);
+         *   → ~0.02ms au lieu de 0.43ms
+         * ----------------------------------------------------- */
+        uint16_t start = notif.ppg_win_idx;
+
+        for (uint16_t i = 0; i < PPG_WINDOW_SIZE; i++)
+        {
+            uint16_t idx = (start + i) % PPG_WINDOW_SIZE;
+            local_ir[i]  = local_ir_raw[idx];
+            local_red[i] = local_red_raw[idx];
+        }
+
+        /* -----------------------------------------------------
+         * ÉTAPE 5 — INITIALISATION DU VECTEUR FEATURES
+         *
+         * memset(&fv, 0, ...) remet les 104 octets à zéro.
+         * Si un calcul échoue (pas assez de pics, mutex timeout)
+         * la feature correspondante vaut 0.0f plutôt qu'une
+         * valeur aléatoire de l'itération précédente.
+         *
+         * On remplit ensuite les métadonnées :
+         *   t_ref     : permet à vTaskIA de savoir à quel instant
+         *               correspondent ces features
+         *   ppg_count : diagnostic — âge des données
+         * ----------------------------------------------------- */
+        memset(&fv, 0, sizeof(FeatureVector_t));
+        fv.t_ref     = notif.t_ref;
+        fv.ppg_count = notif.ppg_count;
+
+        /* -----------------------------------------------------
+         * ÉTAPE 6A — FEATURES PPG (8 features)
+         *
+         * Pipeline en 2 étapes :
+         *
+         * ÉTAPE A : Détecter les pics et calculer les R-R
+         *   PPG_DetectPeaks() → rr.peaks[] + rr.n_peaks
+         *   PPG_CalcRR()      → rr.rr_ms[] + rr.n_rr
+         *
+         * ÉTAPE B : Calculer chaque feature depuis rr
+         *
+         * GARDE rr.n_rr >= 2 :
+         *   BPM, SDNN, RMSSD, pNN50, LF/HF nécessitent au moins
+         *   2 intervalles R-R. Si le signal est trop bruité ou
+         *   le capteur mal positionné → n_rr < 2 → ces features
+         *   restent à 0.0f (initialisées par memset).
+         *
+         * SpO2, Amplitude, Skewness ne dépendent PAS des pics.
+         * Elles sont calculées directement sur le signal brut.
+         * → toujours calculées même si aucun pic détecté.
+         * ----------------------------------------------------- */
+
+        /* Étape A : détection pics + intervalles R-R           */
+        PPG_DetectPeaks(local_ir, PPG_WINDOW_SIZE, &rr);
+        PPG_CalcRR(&rr);
+
+        /* Étape B : features HRV (nécessitent R-R)             */
+        if (rr.n_rr >= 2)
+        {
+            /* BPM = 60000 / moyenne(rr_ms)
+             * Fréquence cardiaque moyenne en battements/minute  */
+            fv.ppg_bpm   = PPG_CalcBPM(&rr);
+
+            /* SDNN = écart-type des intervalles R-R
+             * Variabilité globale — baisse avec la fatigue      */
+            fv.ppg_sdnn  = PPG_CalcSDNN(&rr);
+
+            /* RMSSD = √(moyenne des (RR[i+1]-RR[i])²)
+             * Variabilité court terme — système parasympathique */
+            fv.ppg_rmssd = PPG_CalcRMSSD(&rr);
+
+            /* pNN50 = % des |RR[i+1]-RR[i]| > 50ms
+             * Proportion des grandes variations successives     */
+            fv.ppg_pnn50 = PPG_CalcPNN50(&rr);
+
+            /* LF/HF = variance(RR_lissé) / variance(RR_HF)
+             * Balance sympathique/parasympathique
+             * Augmente avec le stress et la fatigue             */
+            fv.ppg_lf_hf = PPG_CalcLFHF(&rr);
+        }
+        /* Si n_rr < 2 → ppg_bpm, sdnn, rmssd, pnn50, lf_hf = 0 */
+
+        /* SpO2 = f(AC_red/DC_red, AC_ir/DC_ir)
+         * Saturation oxygène — indépendant des pics            */
+        fv.ppg_spo2 = PPG_CalcSpO2(local_ir,
+                                    local_red,
+                                    PPG_WINDOW_SIZE);
+
+        /* Amplitude = max(signal) - min(signal)
+         * Force du signal cardiaque                            */
+        fv.ppg_amplitude = PPG_CalcAmplitude(local_ir,
+                                              PPG_WINDOW_SIZE);
+
+        /* Skewness = Σ(sig-moy)³ / (N × std³)
+         * Asymétrie du signal — change avec la fatigue         */
+        fv.ppg_skewness = PPG_CalcSkewness(local_ir,
+                                            PPG_WINDOW_SIZE);
+
+        /* -----------------------------------------------------
+         * ÉTAPE 6B — FEATURES IMU (4 features) — TODO
+         *
+         * imu_norm_buf[104] → 1s à 104Hz
+         * Protégé par MTX_IMU_BUFHandle
+         * ---------------------------------------------------- */
+        /* if (osMutexAcquire(MTX_IMU_BUFHandle, 10) == osOK)
+         * {
+         *     fv.imu_rms_accel = IMU_Calc_RMS(imu_norm_buf, 104);
+         *     fv.imu_variance  = IMU_Calc_Var(imu_norm_buf, 104);
+         *     fv.imu_peaks     = IMU_Calc_Peaks(imu_norm_buf, 104);
+         *     fv.imu_rms_gyro  = IMU_Calc_RMSGyro(imu_norm_buf, 104);
+         *     osMutexRelease(MTX_IMU_BUFHandle);
+         * } */
+        /* -----------------------------------------------------
+                 * ÉTAPE 6C — FEATURES EMG (8 features)
+                 *
+                 * Buffer 2s lineaire ordonne chronologiquement
+                 * Les 500 derniers samples = [buf[500]..buf[999]]
+                 * correspondent a la derniere seconde @ 500Hz
+                 *
+                 * memmove dans vTaskEMGProcess garantit
+                 * l'ordre chronologique → MDF/MNF corrects ✅
+                 * ----------------------------------------------------- */
+                static float local_emg_ch1[EMG_WIN_LONG];
+                static float local_emg_ch2[EMG_WIN_LONG];
+                uint8_t emg_data_ok = 0;
+                if(emg_buf_ready)
+                {
+                /* Etape 1 — copie rapide sous mutex (<0.01ms) */
+                if(osMutexAcquire(MTX_EMG_BUFHandle, 10) == osOK)
+                {
+                    if(emg_buf_ready)
+                    {
+                        /* Copier les 500 derniers samples
+                         * toujours en ordre chronologique ✅ */
+                        memcpy(local_emg_ch1,
+                               &emg_ch1_buf[500],
+                               EMG_WIN_LONG * sizeof(float));
+                        memcpy(local_emg_ch2,
+                               &emg_ch2_buf[500],
+                               EMG_WIN_LONG * sizeof(float));
+                        emg_data_ok = 1;
+                    }
+                    osMutexRelease(MTX_EMG_BUFHandle);
+                }}
+
+                /* Etape 2 — calculs hors mutex */
+                if(emg_data_ok)
+                {
+                    fv.emg_rms_ch1  = EMG_Calc_RMS(local_emg_ch1,
+                                                     EMG_WIN_LONG);
+                    fv.emg_rms_ch2  = EMG_Calc_RMS(local_emg_ch2,
+                                                     EMG_WIN_LONG);
+                    fv.emg_mav_ch1  = EMG_Calc_MAV(local_emg_ch1,
+                                                     EMG_WIN_LONG);
+                    fv.emg_mav_ch2  = EMG_Calc_MAV(local_emg_ch2,
+                                                     EMG_WIN_LONG);
+                    fv.emg_iemg_ch1 = EMG_Calc_iEMG(local_emg_ch1,
+                                                      EMG_WIN_LONG);
+                    fv.emg_iemg_ch2 = EMG_Calc_iEMG(local_emg_ch2,
+                                                      EMG_WIN_LONG);
+                    fv.emg_mdf      = EMG_Calc_MDF(local_emg_ch1,
+                                                    EMG_WIN_LONG,
+                                                    EMG_FS);
+                    fv.emg_mnf      = EMG_Calc_MNF(local_emg_ch1,
+                                                    EMG_WIN_LONG,
+                                                    EMG_FS);
+                }
+        /* -----------------------------------------------------
+         * ETAPE 6D - FEATURES TEMPERATURE (4 features)
+         *
+         * Buffer 31s lineaire ordonne chronologiquement
+         * Les 76 derniers samples = 30s x 2.54Hz
+         * memmove dans StartTempProcess garantit ordre
+         * ---------------------------------------------------- */
+                static float local_temp_skin[TEMP_BUF_SIZE];
+                static float local_temp_ambient[TEMP_BUF_SIZE];
+                uint8_t temp_data_ok = 0;
+
+                /* Etape 1 - copie rapide sous mutex */
+                if(temp_buf_ready)
+                {
+                    memcpy(local_temp_skin,
+                           temp_skin_buf,
+                           TEMP_WIN_LONG * sizeof(float));
+                    memcpy(local_temp_ambient,
+                           temp_ambient_buf,
+                           TEMP_WIN_LONG * sizeof(float));
+                    temp_data_ok = 1;
+                }
+
+                /* Etape 2 - calculs hors mutex (~0.003ms) */
+                if(temp_data_ok)
+                {
+                    fv.temp_mean = Temp_Calc_Mean(
+                                      local_temp_skin,
+                                      TEMP_WIN_LONG);
+                    fv.temp_delta = Temp_Calc_Delta(
+                                      local_temp_skin,
+                                      local_temp_ambient,
+                                      TEMP_WIN_LONG);
+                    fv.temp_drift = Temp_Calc_Drift(
+                                      local_temp_skin,
+                                      TEMP_WIN_LONG,
+                                      TEMP_FS);
+                    fv.temp_variance = Temp_Calc_Var(
+                                      local_temp_skin,
+                                      TEMP_WIN_LONG);
+                }
+
+        /* -----------------------------------------------------
+         * ÉTAPE 7 — ENVOI DU VECTEUR 24 FEATURES VERS vTaskIA
+         *
+         * osMessageQueueReset :
+         *   Vide la queue si vTaskIA n'a pas encore consommé
+         *   la notification précédente. On veut toujours envoyer
+         *   les features les plus récentes — jamais des features
+         *   vieilles d'une seconde.
+         *
+         * osMessageQueuePut :
+         *   Envoie les 104 octets du vecteur fv.
+         *   Premier  0 : priorité normale du message.
+         *   Deuxième 0 : timeout 0ms = non bloquant.
+         *   Si la queue est pleine (ne devrait pas arriver après
+         *   le Reset) → on ne bloque pas, on perd ce message.
+         *
+         * Après cet envoi → retour au début du for(;;)
+         * → vTaskFeatures se rendort sur osMessageQueueGet
+         * → attend la prochaine notification dans 1 seconde
+         * → 0% CPU pendant cette attente
+         *
+         * BILAN CPU DE CETTE TÂCHE :
+         *   memcpy         ≈ 0.03ms
+         *   reconstruction ≈ 0.43ms
+         *   calcul PPG     ≈ 2ms
+         *   TOTAL actif    ≈ 2.5ms sur 1000ms = 0.25%
+         * ----------------------------------------------------- */
+        osMessageQueueReset(Q_RESULTSHandle);
+        osMessageQueuePut(Q_RESULTSHandle,
+                          &fv,
+                          0,
+                          0);
+
+    } /* fin for(;;) */
+
+  /* USER CODE END StartTaskFeatures */
+}
+
+/* USER CODE BEGIN Header_StartTaskEMGProcess */
+/**
+* @brief Function implementing the vTaskEMGProcess thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTaskEMGProcess */
+void StartTaskEMGProcess(void *argument)
+{
+  /* USER CODE BEGIN StartTaskEMGProcess */
+	/* Initialiser les filtres — un par canal */
+	  EMG_Filter_t filt_ch1, filt_ch2;
+	  EMG_Filter_Init(&filt_ch1);
+	  EMG_Filter_Init(&filt_ch2);
+	  /* Buffers locaux filtres */
+	  /* Buffer local pour ne pas bloquer le mutex */
+
+
+
+
+
+	  ADS1292R_Sample_t sample;
+
+	  for(;;)
+	  {
+	    /* 1. Lire un sample depuis SB_EMG (bloquant) */
+	    size_t bytes = xStreamBufferReceive(
+	                       SB_EMG,
+	                       &sample,
+	                       sizeof(ADS1292R_Sample_t),
+	                       portMAX_DELAY);
+
+	    if(bytes == sizeof(ADS1292R_Sample_t))
+	    {
+	      /* 2. Convertir int32 -> float et filtrer */
+	      float ch1_f = EMG_Filter_Apply(&filt_ch1,
+	                                      (float)sample.ch1);
+	      float ch2_f = EMG_Filter_Apply(&filt_ch2,
+	                                      (float)sample.ch2);
+
+	      /* 3. Stocker dans buffer partage */
+	      if(osMutexAcquire(MTX_EMG_BUFHandle, 5) == osOK)
+	            {
+	              emg_ch1_buf[emg_buf_idx] = ch1_f;
+	              emg_ch2_buf[emg_buf_idx] = ch2_f;
+	              emg_ts_buf[emg_buf_idx]  = sample.timestamp; /* ← ajouter */
+	              emg_buf_idx++;
+
+	              /* Buffer plein apres 1000 samples = 2 secondes */
+	              if(emg_buf_idx >= EMG_BUF_SIZE)
+	              {
+	                /* Decaler 500 anciens vers le debut
+	                 * → buffer toujours dans l'ordre chronologique
+	                 * → MDF/MNF calcules correctement
+	                 * → pas besoin de reconstruction dans TaskFeatures */
+	                memmove(&emg_ch1_buf[0],
+	                        &emg_ch1_buf[500],
+	                        500 * sizeof(float));
+	                memmove(&emg_ch2_buf[0],
+	                        &emg_ch2_buf[500],
+	                        500 * sizeof(float));
+	                memmove(&emg_ts_buf[0],
+	                        &emg_ts_buf[500],
+	                        500 * sizeof(uint32_t));
+	                /* Recommencer a ecrire a partir de 500 */
+	                emg_buf_idx   = 500;
+	                emg_buf_ready = 1;
+	              }
+
+	              osMutexRelease(MTX_EMG_BUFHandle);
+	            }
+	    }
+	  }
+  /* USER CODE END StartTaskEMGProcess */
 }
 
 /* Private application code --------------------------------------------------*/

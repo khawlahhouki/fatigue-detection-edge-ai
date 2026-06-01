@@ -56,7 +56,6 @@ COM_InitTypeDef BspCOMInit;
 
 /* USER CODE BEGIN PV */
 
-
 /* Autres variables globales (comme vos handles de tâches) */
 
 
@@ -162,6 +161,7 @@ int main(void)
 
   if (init_ok==1){ BSP_LED_On(LED_GREEN);}
 
+  HAL_TIM_Base_Start(&htim2);
 
   /* USER CODE END 2 */
 

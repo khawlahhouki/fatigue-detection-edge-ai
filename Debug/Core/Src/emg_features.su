@@ -1,0 +1,6 @@
+../Core/Src/emg_features.c:19:7:EMG_Calc_RMS	24	static
+../Core/Src/emg_features.c:43:7:EMG_Calc_MAV	24	static
+../Core/Src/emg_features.c:67:7:EMG_Calc_iEMG	24	static
+../Core/Src/emg_features.c:92:13:calc_psd_simple	80	static
+../Core/Src/emg_features.c:140:7:EMG_Calc_MDF	1664	static
+../Core/Src/emg_features.c:186:7:EMG_Calc_MNF	1656	static

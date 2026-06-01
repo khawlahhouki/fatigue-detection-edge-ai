@@ -373,7 +373,15 @@ void ADS1292R_ReadMultiRegs(uint8_t reg, uint8_t *data, uint8_t len)
  *   xSemaphoreGive(MTX_SPI2);
  */
 void ADS1292R_GetValue(void)
+
+
 {
+
+
+#ifdef RENODE_SIMULATION
+    return;  // données déjà injectées par le script GDB
+#endif
+
     ADS1292R_CS_LOW;
     /* lire 9 octets d'un coup — ADS1292R_tmp contient 9 octets nuls (dummy TX) */
     HAL_SPI_TransmitReceive(&hspi2,

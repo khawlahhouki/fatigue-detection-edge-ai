@@ -1,0 +1,4 @@
+../Core/Src/temp_features.c:18:7:Temp_Calc_Mean	24	static
+../Core/Src/temp_features.c:43:7:Temp_Calc_Delta	48	static
+../Core/Src/temp_features.c:81:7:Temp_Calc_Drift	32	static
+../Core/Src/temp_features.c:108:7:Temp_Calc_Var	40	static

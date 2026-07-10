@@ -45,9 +45,9 @@ The system acquires biosignals from 4 sensors, processes them in real-time under
 
 | Sensor         | Signal              | Sampling Rate |
 |----------------|---------------------|-------------- |
-| MAX86141       | PPG / SpO2          | 100 Hz        |
+| MAX86141       | PPG / SpO2          | 400 Hz        |
 | LSM6DSO        | IMU (Accel + Gyro)  | 104 Hz        |
-| ADS1292R       | EMG / ECG           | 500 Hz        |
+| ADS1292R       | EMG / ECG           | 1000 Hz        |
 | TMP117 / SHTC3 | Skin Temperature    | 1 Hz          |
 
 

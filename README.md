@@ -56,9 +56,9 @@ The system acquires biosignals from 4 sensors, processes them in real-time under
 | Task | Priority | Description |
 |------|----------|-------------|
 | `TaskPPG` | High | MAX86141 acquisition via SPI + DMA |
-| `TaskIMU` | High | LSM6DSO acquisition via I2C |
+| `TaskIMU` | High | LSM6DSO acquisition via SPI|
 | `TaskEMG` | High | ADS1292R acquisition via SPI |
-| `TaskTemp` | Low | TMP117/SHTC3 acquisition |
+| `TaskTemp` | Low | TMP117/SHTC3 acquisition Via I2C|
 | `TaskSync` | High | Temporal sync via TIM2 (µs timestamps) |
 | `TaskFeatures| Medium | Sliding window feature extraction |
 | `TaskInference| Medium | TFLite INT8 inference via X-CUBE-AI |

@@ -1,0 +1,9 @@
+../Core/Src/freertos.c:283:6:MX_FREERTOS_Init	8	static
+../Core/Src/freertos.c:393:6:StartTaskEMG	32	static
+../Core/Src/freertos.c:453:6:StartTaskPPG	816	static,ignoring_inline_asm
+../Core/Src/freertos.c:625:6:StartTaskIMU	304	static
+../Core/Src/freertos.c:714:6:StartTaskTemp	72	static
+../Core/Src/freertos.c:868:6:StartTaskDSP	1128	static
+../Core/Src/freertos.c:1169:6:StartTempProcess	40	static
+../Core/Src/freertos.c:1222:6:StartTaskFeatures	144	static
+../Core/Src/freertos.c:1678:6:StartTaskEMGProcess	136	static

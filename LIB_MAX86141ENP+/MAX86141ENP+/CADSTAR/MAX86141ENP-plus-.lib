@@ -1,0 +1,19 @@
+.MAX86141ENP-plus- :1 ;MAXIM INTEGRATED PRODUCTS - MAX86141ENP+ - PULSE OXIMETER/HEART RATE SENSOR, WLP-20
+BGA20C40P5X4_205X185X50
+*STM IC
+*NGS
+*PNM 1=A1 2=A2 3=A3 4=A4 5=A5 6=B1 7=B2 8=B3 9=B4 10=B5 11=C1 12=C2 13=C3 14=C4 15=C5 16=D1 17=D2 18=D3 19=D4 20=D5
+*PLB 1="VLED" 2="SCLK" 3="SDO" 4="SDI" 5="CSB" 6="LED3_DRV" 7="'INT'" 8="GPIO1" 9="GPIO2" 10="VREF" 11="LED2_DRV" 12="VDD_DIG" 13="GND_DIG" 14="GND_ANA" 15="PD_GND" 16="LED1_DRV" 17="VDD_ANA" 18="PGND" 19="PD2_IN" 20="PD1_IN"
+*MXP 20
+*DFN MAX86141ENP-plus-
+~!Manufacturer_Name (Analog Devices)
+~!Manufacturer_Part_Number (MAX86141ENP+)
+~!Mouser Part Number (700-MAX86141ENP+)
+~!Link Mouser Price/Stock (https://www.mouser.co.uk/ProductDetail/Analog-Devices-Maxim-Integrated/MAX86141ENP%2b?qs=YCa%2FAAYMW01jqVI3kzZSjA%3D%3D)
+~!Arrow Part Number (-)
+~!Arrow Price/Stock (-)
+~!Link Datasheet (https://datasheets.maximintegrated.com/en/ds/MAX86140-MAX86141.pdf)
+~!Height (0.5mm)
+~!3D_Model (MAX86141ENP+)
+MAX86141ENP-plus-
+1.1!U 2.1!U 3.1!U 4.1!U 5.1!U 6.1!U 7.1!U 8.1!U 9.1!U 10.1!U 11.1!U 12.1!U 13.1!U 14.1!U 15.1!U 16.1!U 17.1!U 18.1!U 19.1!U 20.1!U 

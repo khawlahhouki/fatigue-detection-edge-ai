@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP MAX86141ENP+
+D MAXIM INTEGRATED PRODUCTS - MAX86141ENP+ - PULSE OXIMETER/HEART RATE SENSOR, WLP-20
+K
+F https://datasheets.maximintegrated.com/en/ds/MAX86140-MAX86141.pdf
+$ENDCMP
+#
+#End Doc Library

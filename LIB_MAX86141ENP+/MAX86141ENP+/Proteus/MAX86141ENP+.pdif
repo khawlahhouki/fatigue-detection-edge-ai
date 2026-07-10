@@ -1,0 +1,220 @@
+;Proteus Design Interchange Format
+(PDIF
+ (vendor "SamacSys Limited")
+ (version 1 0)
+ (library
+  (part "MAX86141ENP+"
+   (description "MAXIM INTEGRATED PRODUCTS - MAX86141ENP+ - PULSE OXIMETER/HEART RATE SENSOR, WLP-20")
+   (family "ANA")
+   (package "BGA20C40P5X4_205X185X50")
+   (attribute "Datasheet Link" "https://datasheets.maximintegrated.com/en/ds/MAX86140-MAX86141.pdf")
+   (attribute "Geometry.Height" "0.5mm")
+   (attribute "Manufacturer_Name" "Analog Devices")
+   (attribute "Manufacturer_Part_Number" "MAX86141ENP+")
+   (attribute "Mouser Part Number" "700-MAX86141ENP+")
+   (attribute "Mouser Price/Stock" "https://www.mouser.co.uk/ProductDetail/Analog-Devices-Maxim-Integrated/MAX86141ENP%2b?qs=YCa%2FAAYMW01jqVI3kzZSjA%3D%3D")
+   (attribute "Arrow Part Number" "")
+   (attribute "Arrow Price/Stock" "")
+   (gate
+    (symbol "MAX86141ENP+")
+    (pin "VLED" A1 PS)
+    (pin "SCLK" A2 PS)
+    (pin "SDO" A3 PS)
+    (pin "SDI" A4 PS)
+    (pin "CSB" A5 PS)
+    (pin "LED3_DRV" B1 PS)
+    (pin "$INT$" B2 PS)
+    (pin "GPIO1" B3 PS)
+    (pin "GPIO2" B4 PS)
+    (pin "VREF" B5 PS)
+    (pin "LED2_DRV" C1 PS)
+    (pin "VDD_DIG" C2 PS)
+    (pin "GND_DIG" C3 PS)
+    (pin "GND_ANA" C4 PS)
+    (pin "PD_GND" C5 PS)
+    (pin "LED1_DRV" D1 PS)
+    (pin "VDD_ANA" D2 PS)
+    (pin "PGND" D3 PS)
+    (pin "PD2_IN" D4 PS)
+    (pin "PD1_IN" D5 PS)
+   )
+  )
+  (symbol "MAX86141ENP+"
+   (units THOU)
+   (origin (pt 0 0))
+   (graphic
+    (stroke 10)
+    (path (pt 200 100) (pt 1300 100) (pt 1300 -1000) (pt 200 -1000) (pt 200 100) (closed))
+   )
+   (terminal
+    (body (symbol "PIN") (pt 0 0) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -100) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -200) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -300) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -400) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -500) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -600) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -700) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -800) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 0 -900) (rot 0) (mir 0) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 0) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -100) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -200) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -300) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -400) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -500) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -600) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -700) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -800) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+   (terminal
+    (body (symbol "PIN") (pt 1500 -900) (rot 0) (mir X) (visible true))
+    (name (pt 230 0) (rot 0) (just MIDDLE LEFT) (visible true))
+    (number (pt 140 20) (rot 0) (just BOTTOM RIGHT) (visible true)))
+  )
+  (symbol "PIN"
+   (units THOU)
+   (origin (pt 0 0))
+   (graphic
+    (stroke 10)
+    (path (pt 0 0) (pt 200 0))))
+  (symbol "PINSHORT"
+   (units THOU)
+   (origin (pt 0 0))
+   (graphic
+    (stroke 10)
+    (path (pt 0 0) (pt 100 0))))
+  (package "BGA20C40P5X4_205X185X50"
+   (units MM)
+   (layer OCCA
+    (graphic
+     (stroke 0.05)
+     (path
+      (closed true)
+      (pt -2.036 1.936)
+      (pt 2.037 1.936)
+      (pt 2.037 -1.937)
+      (pt -2.036 -1.937)
+      (pt -2.036 1.936))))
+   (layer TASM
+    (graphic
+     (stroke 0.1)
+     (path
+      (closed true)
+      (pt -1.024 0.924)
+      (pt 1.024 0.924)
+      (pt 1.024 -0.924)
+      (pt -1.024 -0.924)
+      (pt -1.024 0.924))))
+   (layer TASM
+    (graphic
+     (stroke 0.1)
+     (path
+      (closed false)
+      (pt -1.024 0.456)
+      (pt -0.556 0.924))))
+   (layer TSLK
+    (graphic
+     (stroke 0.2)
+     (path
+      (closed false)
+      (pt -0.8 1.058)
+      (pt 1.258 1.058)
+      (pt 1.258 -1.058)
+      (pt -1.258 -1.058)
+      (pt -1.258 0.6)
+      (pt -0.8 1.058))))
+   (layer TSLK
+    (graphic
+     (stroke 0.2)
+     (circle
+      (pt -1.158 1.058) (pt -1.358 1.058)
+     )
+    )
+   )
+   (leg A1 (pt -0.8 0.6) (padstack 0))
+   (leg A2 (pt -0.4 0.6) (padstack 0))
+   (leg A3 (pt 0 0.6) (padstack 0))
+   (leg A4 (pt 0.4 0.6) (padstack 0))
+   (leg A5 (pt 0.8 0.6) (padstack 0))
+   (leg B1 (pt -0.8 0.2) (padstack 0))
+   (leg B2 (pt -0.4 0.2) (padstack 0))
+   (leg B3 (pt 0 0.2) (padstack 0))
+   (leg B4 (pt 0.4 0.2) (padstack 0))
+   (leg B5 (pt 0.8 0.2) (padstack 0))
+   (leg C1 (pt -0.8 -0.2) (padstack 0))
+   (leg C2 (pt -0.4 -0.2) (padstack 0))
+   (leg C3 (pt 0 -0.2) (padstack 0))
+   (leg C4 (pt 0.4 -0.2) (padstack 0))
+   (leg C5 (pt 0.8 -0.2) (padstack 0))
+   (leg D1 (pt -0.8 -0.6) (padstack 0))
+   (leg D2 (pt -0.4 -0.6) (padstack 0))
+   (leg D3 (pt 0 -0.6) (padstack 0))
+   (leg D4 (pt 0.4 -0.6) (padstack 0))
+   (leg D5 (pt 0.8 -0.6) (padstack 0))
+   (padstack 0
+    (plated false)
+    (pad (layer TCOP) (round 0.216))
+   )
+   (model "MAX86141ENP+.stp"
+    (euler 0 0 0)
+    (offset 0 0 0)
+   )
+  )
+ )
+)

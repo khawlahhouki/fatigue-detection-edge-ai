@@ -1,0 +1,9 @@
+Manufacturer=Analog Devices
+PartNumber=MAX86141ENP+
+PartCategory=Integrated Circuit
+PackageCategory=BGA
+PinCount=20
+Version=5.1
+Released=2018-03-05 11:54:51
+Downloaded=2026-05-30 23:31:56
+3D=Y

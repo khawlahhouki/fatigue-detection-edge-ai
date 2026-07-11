@@ -1,8 +1,0 @@
-../Core/Src/max86141.c:33:13:CS_LOW	16	static
-../Core/Src/max86141.c:42:13:CS_HIGH	16	static
-../Core/Src/max86141.c:92:6:MAX86141_WriteReg	32	static
-../Core/Src/max86141.c:112:9:MAX86141_ReadReg	40	static
-../Core/Src/max86141.c:155:9:MAX86141_Init	40	static
-../Core/Src/max86141.c:291:9:MAX86141_GetFIFOCount	32	static
-../Core/Src/max86141.c:328:9:MAX86141_ReadFIFO	1592	static
-../Core/Src/max86141.c:392:6:MAX86141_DecodeFIFO	40	static

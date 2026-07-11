@@ -1,8 +1,0 @@
-../Core/Src/lsm6dso_imu.c:41:16:LSM6DSO_SPI_Write	3
-../Core/Src/lsm6dso_imu.c:65:16:LSM6DSO_SPI_Read	3
-../Core/Src/lsm6dso_imu.c:96:9:LSM6DSO_IMU_Init	6
-../Core/Src/lsm6dso_imu.c:195:9:LSM6DSO_IMU_Start	1
-../Core/Src/lsm6dso_imu.c:236:9:LSM6DSO_IMU_ReadSample	5
-../Core/Src/lsm6dso_imu.c:274:9:LSM6DSO_IMU_GetFIFOLevel	3
-../Core/Src/lsm6dso_imu.c:304:9:LSM6DSO_IMU_ReadFIFO	9
-../Core/Src/lsm6dso_imu.c:381:9:LSM6DSO_IMU_ReadFIFO_Raw	9

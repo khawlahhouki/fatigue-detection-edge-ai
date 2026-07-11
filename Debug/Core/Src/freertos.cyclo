@@ -1,9 +1,0 @@
-../Core/Src/freertos.c:283:6:MX_FREERTOS_Init	4
-../Core/Src/freertos.c:393:6:StartTaskEMG	4
-../Core/Src/freertos.c:453:6:StartTaskPPG	8
-../Core/Src/freertos.c:625:6:StartTaskIMU	6
-../Core/Src/freertos.c:714:6:StartTaskTemp	5
-../Core/Src/freertos.c:868:6:StartTaskDSP	16
-../Core/Src/freertos.c:1169:6:StartTempProcess	3
-../Core/Src/freertos.c:1222:6:StartTaskFeatures	12
-../Core/Src/freertos.c:1678:6:StartTaskEMGProcess	4

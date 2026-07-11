@@ -1,2 +1,0 @@
-../Core/Src/ppg_filter.c:32:6:PPG_Filter_Init	16	static
-../Core/Src/ppg_filter.c:57:7:PPG_Filter_Apply	24	static

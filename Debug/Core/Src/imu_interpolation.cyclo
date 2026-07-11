@@ -1,4 +1,0 @@
-../Core/Src/imu_interpolation.c:7:6:IMU_Interp_Init	1
-../Core/Src/imu_interpolation.c:34:6:IMU_Interp_SetBatch	6
-../Core/Src/imu_interpolation.c:97:7:IMU_Interp_GetMag	6
-../Core/Src/imu_interpolation.c:160:7:IMU_Interp_Normalize	1

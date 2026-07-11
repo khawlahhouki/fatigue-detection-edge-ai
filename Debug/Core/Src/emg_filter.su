@@ -1,2 +1,0 @@
-../Core/Src/emg_filter.c:9:6:EMG_Filter_Init	16	static
-../Core/Src/emg_filter.c:35:7:EMG_Filter_Apply	32	static

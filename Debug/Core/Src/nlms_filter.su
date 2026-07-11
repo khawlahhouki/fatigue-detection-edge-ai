@@ -1,2 +1,0 @@
-../Core/Src/nlms_filter.c:10:6:NLMS_Init	16	static
-../Core/Src/nlms_filter.c:39:7:NLMS_Apply	32	static

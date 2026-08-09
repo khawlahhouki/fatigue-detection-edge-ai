@@ -18216,11 +18216,11 @@
 	)
 	(text "Cl=((CL1*Cl2)/(CL1+Cl2))+Cs"
 		(exclude_from_sim no)
-		(at 360.172 55.372 0)
+		(at 356.616 59.182 0)
 		(effects
 			(font
-				(size 1.27 1.27)
-				(thickness 0.254)
+				(size 1.016 1.016)
+				(thickness 0.2032)
 				(bold yes)
 			)
 		)
@@ -19322,10 +19322,6 @@
 	(no_connect
 		(at 328.93 100.33)
 		(uuid "ee64cb7c-d8f8-4c5b-8a37-0cbdfe53ac14")
-	)
-	(no_connect
-		(at 369.57 24.13)
-		(uuid "f1231a9d-dc6e-404a-80ef-182d40517ff3")
 	)
 	(no_connect
 		(at 361.95 82.55)
@@ -21685,7 +21681,7 @@
 	)
 	(global_label "INT_MAX86141"
 		(shape input)
-		(at 369.57 34.29 0)
+		(at 369.57 24.13 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -21695,7 +21691,7 @@
 		)
 		(uuid "7d4e1e79-d6e7-412d-ad1e-8f1bd195c0be")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 386.2227 34.29 0)
+			(at 386.2227 24.13 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -26967,7 +26963,7 @@
 		(dnp no)
 		(uuid "571301f1-dc90-4528-9939-ccf9a03eff2a")
 		(property "Reference" "U5"
-			(at 355.6 35.5914 0)
+			(at 354.838 35.306 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects

@@ -26,7 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "max86141.h"
+
 #include "ads1292r.h"
 #include "stream_buffer.h"
 #include "semphr.h"
@@ -43,6 +43,10 @@
 #include "temp_features.h"
 #include "safe_printf.h"
 #include "imu_features.h"
+#include "lora_interface.h"
+#include "max30102.h"
+#include "debug_config.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,6 +56,12 @@ typedef struct {
     uint16_t ppg_win_idx;
     uint32_t ppg_count;
 } PPG_Notify_t;
+
+typedef struct {
+    uint32_t ir;
+    uint32_t red;
+    uint32_t timestamp;
+} PPG_Sample_t;
 
 typedef struct {
 
@@ -173,8 +183,10 @@ extern TIM_HandleTypeDef  htim2;
 static float    ppg_ir_buf[PPG_WINDOW_SIZE];
 static float    ppg_red_buf[PPG_WINDOW_SIZE];
 
-	  /*  tourne en cercle de 0 à 7999. Quand il atteint 8000 il revient à 0
-	  c'est le buffer circulaire. Les 8000 derniers samples (= 20 s à 400 Hz) sont toujours disponibles */
+
+static float    ppg_ir_raw_buf[PPG_WINDOW_SIZE];   /* reste en RAM_D1 */
+__attribute__((section(".ram_d2")))
+static float    ppg_red_raw_buf[PPG_WINDOW_SIZE];  /* deplace en RAM_D2 (32 Ko libres) */
 
 /* Buffers EMG partages entre vTaskEMGProcess et TaskFeatures */
 /* Buffer EMG 2 secondes = 1000 samples @ 500Hz */
@@ -229,7 +241,7 @@ osThreadId_t vTaskDSPHandle;
 const osThreadAttr_t vTaskDSP_attributes = {
   .name = "vTaskDSP",
   .stack_size = 1024 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for TempProcessTask */
 osThreadId_t TempProcessTaskHandle;
@@ -243,7 +255,7 @@ osThreadId_t TaskFeaturesHandle;
 const osThreadAttr_t TaskFeatures_attributes = {
   .name = "TaskFeatures",
   .stack_size = 2048 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for vTaskEMGProcess */
 osThreadId_t vTaskEMGProcessHandle;
@@ -264,6 +276,20 @@ osThreadId_t IMUProcessTaskHandle;
 const osThreadAttr_t IMUProcessTask_attributes = {
   .name = "IMUProcessTask",
   .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for vTaskLoRaEmerge */
+osThreadId_t vTaskLoRaEmergeHandle;
+const osThreadAttr_t vTaskLoRaEmerge_attributes = {
+  .name = "vTaskLoRaEmerge",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
+/* Definitions for vTaskInferenceI */
+osThreadId_t vTaskInferenceIHandle;
+const osThreadAttr_t vTaskInferenceI_attributes = {
+  .name = "vTaskInferenceI",
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for Q_TEMP */
@@ -280,6 +306,16 @@ const osMessageQueueAttr_t Q_RESULTS_attributes = {
 osMessageQueueId_t Q_FEATURESHandle;
 const osMessageQueueAttr_t Q_FEATURES_attributes = {
   .name = "Q_FEATURES"
+};
+/* Definitions for loraTxQueue */
+osMessageQueueId_t loraTxQueueHandle;
+const osMessageQueueAttr_t loraTxQueue_attributes = {
+  .name = "loraTxQueue"
+};
+/* Definitions for loraEmergencyQueue */
+osMessageQueueId_t loraEmergencyQueueHandle;
+const osMessageQueueAttr_t loraEmergencyQueue_attributes = {
+  .name = "loraEmergencyQueue"
 };
 /* Definitions for MTX_SPI2 */
 osMutexId_t MTX_SPI2Handle;
@@ -306,6 +342,11 @@ osMutexId_t MTX_IMU_BUFHandle;
 const osMutexAttr_t MTX_IMU_BUF_attributes = {
   .name = "MTX_IMU_BUF"
 };
+/* Definitions for loraRadioMutex */
+osMutexId_t loraRadioMutexHandle;
+const osMutexAttr_t loraRadioMutex_attributes = {
+  .name = "loraRadioMutex"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -322,6 +363,8 @@ void StartTaskFeatures(void *argument);
 void StartEMGProcess(void *argument);
 void StartTaskLoRa(void *argument);
 void StartIMUProcessTask(void *argument);
+void TaskLoRaEmergency(void *argument);
+void StartTaskInferenceIA(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -350,6 +393,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of MTX_IMU_BUF */
   MTX_IMU_BUFHandle = osMutexNew(&MTX_IMU_BUF_attributes);
 
+  /* creation of loraRadioMutex */
+  loraRadioMutexHandle = osMutexNew(&loraRadioMutex_attributes);
+
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
@@ -371,7 +417,14 @@ void MX_FREERTOS_Init(void) {
   Q_RESULTSHandle = osMessageQueueNew (20, 64, &Q_RESULTS_attributes);
 
   /* creation of Q_FEATURES */
-  Q_FEATURESHandle = osMessageQueueNew (1, 10, &Q_FEATURES_attributes);
+
+  Q_FEATURESHandle = osMessageQueueNew (1, sizeof(PPG_Notify_t), &Q_FEATURES_attributes);
+
+  /* creation of loraTxQueue */
+  loraTxQueueHandle = osMessageQueueNew (5, 12, &loraTxQueue_attributes);
+
+  /* creation of loraEmergencyQueue */
+  loraEmergencyQueueHandle = osMessageQueueNew (3, 12, &loraEmergencyQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -408,6 +461,12 @@ void MX_FREERTOS_Init(void) {
   /* creation of IMUProcessTask */
   IMUProcessTaskHandle = osThreadNew(StartIMUProcessTask, NULL, &IMUProcessTask_attributes);
 
+  /* creation of vTaskLoRaEmerge */
+  vTaskLoRaEmergeHandle = osThreadNew(TaskLoRaEmergency, NULL, &vTaskLoRaEmerge_attributes);
+
+  /* creation of vTaskInferenceI */
+  vTaskInferenceIHandle = osThreadNew(StartTaskInferenceIA, NULL, &vTaskInferenceI_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -415,11 +474,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
   /* SB_PPG — trigger = 1 lot complet de 64 paires */
-    SB_PPG = xStreamBufferCreate(
-        64 * sizeof(MAX86141_Sample_t) * 2,
-        64 * sizeof(MAX86141_Sample_t)
-    );
-
+  SB_PPG = xStreamBufferCreate(
+          64 * sizeof(PPG_Sample_t) * 2,
+          64 * sizeof(PPG_Sample_t)
+      );
 
 
     SB_EMG = xStreamBufferCreate(
@@ -460,7 +518,8 @@ void StartTaskEMG(void *argument)
   for(;;)
   {
 	  HAL_GPIO_TogglePin(LED1_GPIO_PORT, LED1_PIN);
-	     SafePrintf("[EMG] tick\r\n");
+
+	     DBG_PRINT(DEBUG_EMG, "[EMG] tick\r\n");
 	     osDelay(500);
   }
   /* USER CODE END StartTaskEMG */
@@ -476,13 +535,106 @@ void StartTaskEMG(void *argument)
 void StartTaskPPG(void *argument)
 {
   /* USER CODE BEGIN StartTaskPPG */
-  /* Infinite loop */
+  /* ---------------------------------------------------------------------
+   * MAX30102 (I2C4, PD12/PD13) -- projet de test Test_LED_H723ZG
+   * ---------------------------------------------------------------------
+   * La FIFO du MAX30102 ne contient que 32 echantillons max par
+   * interruption. On accumule ici, dans un buffer statique de la tache,
+   * across plusieurs cycles d'interruption (typiquement 4 x ~17
+   * echantillons), et on n'envoie a SB_PPG QUE lorsqu'on a exactement
+   * 64 echantillons accumules.
+   * --------------------------------------------------------------------- */
+
+  #define PPG_LOT_SIZE 64
+
+  static PPG_Sample_t lot_buf[PPG_LOT_SIZE];
+  static uint8_t lot_fill = 0;  /* nombre d'échantillons déjà accumulés */
+  static uint32_t ppg_timeout_counter = 0;
+
+  uint32_t trigger_time = 0;
+
+  /* Période d'échantillonnage nominale à 400 sps (SPO2_CONFIG = 0x2F). */
+  const float ppg_sample_period_us = 2500.0f; /* 1/400Hz nominal */
+
   for(;;)
   {
-	  HAL_GPIO_TogglePin(LED2_GPIO_PORT, LED2_PIN);
-	     SafePrintf("[PPG] tick\r\n");
-	     osDelay(700);
-  }
+    /* Timeout 150ms : temps max attendu entre deux interruptions FIFO
+     * du MAX30102 (typiquement ~42.5ms à 400sps / FIFO_A_FULL=17). */
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(150)) > 0)
+    {
+      trigger_time = ppg_isr_timestamp;
+
+      /* Lire le statut efface l'interruption côté capteur */
+      MAX30102_ClearInterruptFlags(&hi2c4);
+
+      /* Vider la FIFO dans un buffer temporaire local (pas de mutex :
+       * I2C4 est un bus dédié, aucune autre tâche n'y accède). */
+      MAX30102_Sample raw[32];
+      uint8_t raw_count = 0;
+      while (MAX30102_GetNumSamplesInFifo(&hi2c4) > 0 && raw_count < 32)
+      {
+          MAX30102_Sample s;
+          if (!MAX30102_ReadFifoSample(&hi2c4, &s))
+              break;
+          raw[raw_count] = s;
+          raw_count++;
+      }
+
+      /* Horodatage par échantillon de CE paquet FIFO : le dernier
+       * échantillon lu est le plus proche de trigger_time, on remonte
+       * le temps pour les précédents. */
+      uint32_t raw_ts[32];
+      for (uint8_t i = 0; i < raw_count; i++)
+      {
+          float offset = (float)(raw_count - 1 - i) * ppg_sample_period_us;
+          raw_ts[i] = trigger_time - (uint32_t)offset;
+      }
+
+      /* Accumulation dans lot_buf, échantillon par échantillon, jusqu'à
+       * atteindre PPG_LOT_SIZE (64) -- alors seulement on envoie. */
+      for (uint8_t i = 0; i < raw_count; i++)
+      {
+          lot_buf[lot_fill].ir        = raw[i].ir;
+          lot_buf[lot_fill].red       = raw[i].red;
+          lot_buf[lot_fill].timestamp = raw_ts[i];
+          lot_fill++;
+
+          if (lot_fill == PPG_LOT_SIZE)
+          {
+              if (SB_PPG != NULL)
+              {
+                  size_t sent = xStreamBufferSend(SB_PPG,
+                                    lot_buf,
+                                    PPG_LOT_SIZE * sizeof(PPG_Sample_t),
+                                    0);
+
+                  /* DEBUG THROTTLE : 1 seule ligne par lot de 64 (~170ms),
+                   * pas par interruption -- a retirer une fois valide */
+                  if (sent == PPG_LOT_SIZE * sizeof(PPG_Sample_t)) {
+
+                      DBG_PRINT(DEBUG_PPG , "[PPG_ACQ] Lot de 64 envoye vers SB_PPG, IR[0]=%lu RED[0]=%lu\r\n",
+                              (unsigned long)lot_buf[0].ir, (unsigned long)lot_buf[0].red);
+                  } else {
+
+                      DBG_PRINT(DEBUG_PPG , "[PPG_ACQ] ECHEC envoi SB_PPG (buffer plein ?)\r\n");
+                  }
+              }
+              lot_fill = 0; /* on repart à zéro pour le prochain lot de 64 */
+          }
+      } /* fin for accumulation */
+    }
+    else
+    {
+      /* DEBUG THROTTLE : 1 ligne toutes les ~3 secondes (20 x 150ms),
+       * pas à chaque timeout -- confirme que la tâche tourne et si
+       * l'interruption arrive ou pas */
+      if (++ppg_timeout_counter % 20 == 0) {
+
+          DBG_PRINT(DEBUG_PPG ,"[PPG_ACQ] tick (pas d'interruption depuis 150ms x%lu)\r\n",
+                  (unsigned long)ppg_timeout_counter);
+      }
+    }
+  } /* fin for(;;) */
   /* USER CODE END StartTaskPPG */
 }
 
@@ -497,55 +649,80 @@ void StartTaskIMU(void *argument)
 {
   /* USER CODE BEGIN StartTaskIMU */
 
-  IMU_Batch_t batch;
-  IMU_Feature_Batch_t feature_batch;
+	  /* USER CODE BEGIN StartTaskIMU */
 
-  if (LSM6DSO_IMU_Start() != LSM6DSO_IMU_OK)
-  {
-    SafePrintf("[IMU_ACQ] START FAILED\r\n");
-  }
-  else
-  {
-    SafePrintf("[IMU_ACQ] Start OK\r\n");
-  }
+	  IMU_Batch_t batch;
+	  IMU_Feature_Batch_t feature_batch;
 
-  for(;;)
-  {
-    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200)) != 0)
-    {
-      uint32_t sample_timestamp = Imu_isr_timestamp;
-      SafePrintf("[IMU_ACQ] INT1 recu, timestamp=%lu us\r\n", sample_timestamp);
+	  if (LSM6DSO_IMU_Start() != LSM6DSO_IMU_OK)
+	  {
+	    DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] START FAILED\r\n");
+	  }
+	  else
+	  {
 
-      int32_t ret = LSM6DSO_IMU_ReadFIFO_Full(batch.slots,&feature_batch,&batch.count,sample_timestamp);
+	    DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] Start OK\r\n");
 
-      if (ret == LSM6DSO_IMU_OK)
-      {
-        SafePrintf("[IMU_ACQ] FIFO lu OK, count=%d\r\n", feature_batch.count);
+	  }
 
-        if (SB_IMU_FEATURES != NULL)
-        {
-          size_t sent = xStreamBufferSend(SB_IMU_FEATURES, &feature_batch,
-                                            sizeof(IMU_Feature_Batch_t), 0);
-          if (sent == sizeof(IMU_Feature_Batch_t))
-          {
-            SafePrintf("[IMU_ACQ] Envoye vers SB_IMU_FEATURES (%d octets)\r\n", (int)sent);
-          }
-          else
-          {
-            SafePrintf("[IMU_ACQ] ECHEC envoi SB_IMU_FEATURES (buffer plein ?)\r\n");
-          }
-        }
-      }
-      else
-      {
-        SafePrintf("[IMU_ACQ] ReadFIFO_Full FAILED (ret=%ld)\r\n", ret);
-      }
-    }
-    else
-    {
-      SafePrintf("[IMU_ACQ] Timeout - pas d'INT1\r\n");
-    }
-  }
+	  for(;;)
+	  {
+	    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200)) != 0)
+	    {
+	      uint32_t sample_timestamp = Imu_isr_timestamp;
+	      DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] INT1 recu, timestamp=%lu us\r\n", sample_timestamp);
+
+
+	      int32_t ret = LSM6DSO_IMU_ReadFIFO_Full(batch.slots,&feature_batch,&batch.count,sample_timestamp);
+
+	      if (ret == LSM6DSO_IMU_OK)
+	      {
+
+	        DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] FIFO lu OK, count=%d\r\n", feature_batch.count);
+
+	        /* Envoi vers SB_IMU (batch brut) -- consommé par StartTaskDSP
+	         * pour l'interpolation/correction NLMS du signal PPG. Distinct
+	         * de SB_IMU_FEATURES (feature_batch), qui alimente une autre
+	         * chaîne de traitement en aval (StartTaskIMUProcess). */
+	        if (SB_IMU != NULL)
+	        {
+	          size_t sent_imu = xStreamBufferSend(SB_IMU, &batch,
+	                                                sizeof(IMU_Batch_t), 0);
+	          if (sent_imu != sizeof(IMU_Batch_t))
+	          {
+
+	            DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] ECHEC envoi SB_IMU (buffer plein ?)\r\n");
+	          }
+	        }
+
+	        if (SB_IMU_FEATURES != NULL)
+	        {
+	          size_t sent = xStreamBufferSend(SB_IMU_FEATURES, &feature_batch,
+	                                            sizeof(IMU_Feature_Batch_t), 0);
+	          if (sent == sizeof(IMU_Feature_Batch_t))
+	          {
+
+	            DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] Envoye vers SB_IMU_FEATURES (%d octets)\r\n", (int)sent);
+	          }
+	          else
+	          {
+	        	 DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] ECHEC envoi SB_IMU_FEATURES (buffer plein ?)\r\n");
+
+	          }
+	        }
+	      }
+	      else
+	      {
+	    	  DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] ReadFIFO_Full FAILED (ret=%ld)\r\n", ret);
+
+	      }
+	    }
+	    else
+	    {
+	      DBG_PRINT(DEBUG_IMU, "[IMU_ACQ] Timeout - pas d'INT1\r\n");
+
+	    }
+	  }
 
   /* USER CODE END StartTaskIMU */
 }
@@ -610,17 +787,17 @@ void StartTaskTemp(void *argument)
 	        }
 	        else
 	        {
-	            SafePrintf("[TEMP] MTX_I2C1Handle indisponible (lecture, timeout 100ms)\r\n");
+	            DBG_PRINT(DEBUG_TEMP , "[TEMP] MTX_I2C1Handle indisponible (lecture, timeout 100ms)\r\n");
 	        }
 
 	        /* --- Traçage : état individuel de chaque capteur --- */
 	        if (!tmp_ok)
-	        {
-	            SafePrintf("[TEMP] TMP117 lecture FAILED\r\n");
+	        {   DBG_PRINT(DEBUG_TEMP , "[TEMP] TMP117 lecture FAILED\r\n");
+
 	        }
 	        if (shtc_ok != 1)
-	        {
-	            SafePrintf("[TEMP] SHTC3 lecture FAILED (crc/status=%lu)\r\n", shtc_ok);
+	        {   DBG_PRINT(DEBUG_TEMP ,"[TEMP] SHTC3 lecture FAILED (crc/status=%lu)\r\n", shtc_ok);
+
 	        }
 
 	        if (tmp_ok && (shtc_ok == 1))
@@ -639,7 +816,8 @@ void StartTaskTemp(void *argument)
 	          if (temp_ok_print_counter >= 5)
 	          {
 	              temp_ok_print_counter = 0;
-	              SafePrintf("[TEMP] OK -> skin=%.2f C, ambient=%.2f C, hum=%.1f %%, ts_tmp117=%lu us, ts_shtc3=%lu us\r\n",
+
+	              DBG_PRINT(DEBUG_TEMP ,"[TEMP] OK -> skin=%.2f C, ambient=%.2f C, hum=%.1f %%, ts_tmp117=%lu us, ts_shtc3=%lu us\r\n",
 	                         temp_sample.temp_skin_c,
 	                         temp_sample.temp_ambient_c,
 	                         temp_sample.humidity_pct,
@@ -655,7 +833,8 @@ void StartTaskTemp(void *argument)
 	    }
 	    else
 	    {
-	        SafePrintf("[TEMP] MTX_I2C1Handle indisponible (lancement mesure, timeout 100ms)\r\n");
+	    	 DBG_PRINT(DEBUG_TEMP ,"[TEMP] MTX_I2C1Handle indisponible (lancement mesure, timeout 100ms)\r\n");
+
 	    }
 	  }
   /* USER CODE END StartTaskTemp */
@@ -667,20 +846,163 @@ void StartTaskTemp(void *argument)
 * @param argument: Not used
 * @retval None
 */
+
+/* USER CODE BEGIN Header_StartTaskDSP */
+/**
+* @brief Function implementing the vTaskDSP thread.
+* @param argument: Not used
+* @retval None
+*/static void DSP_StorePPGSample(float ir_val, float red_val,
+        float ir_raw, float red_raw,
+        uint32_t sample_timestamp,
+        uint16_t *ppg_win_idx,
+        uint32_t *ppg_count,
+        uint8_t  *features_armed,
+        uint32_t *last_ppg_timestamp)
+{
+if (osMutexAcquire(MTX_PPG_BUFHandle, 5) == osOK)
+{
+ppg_ir_buf[*ppg_win_idx]      = ir_val;
+ppg_red_buf[*ppg_win_idx]     = red_val;
+ppg_ir_raw_buf[*ppg_win_idx]  = ir_raw;   /* signal brut, meme index */
+ppg_red_raw_buf[*ppg_win_idx] = red_raw;
+osMutexRelease(MTX_PPG_BUFHandle);
+}
+
+*ppg_win_idx = (*ppg_win_idx + 1) % PPG_WINDOW_SIZE;
+(*ppg_count)++;
+*last_ppg_timestamp = sample_timestamp;
+
+if (!(*features_armed) && *ppg_count >= PPG_WINDOW_SIZE)
+{
+*features_armed = 1;
+}
+
+if (*features_armed && (*ppg_count % 400 == 0))
+{
+PPG_Notify_t notif;
+notif.t_ref       = *last_ppg_timestamp;
+notif.ppg_win_idx = *ppg_win_idx;
+notif.ppg_count   = *ppg_count;
+
+osMessageQueueReset(Q_FEATURESHandle);
+osMessageQueuePut(Q_FEATURESHandle, &notif, 0, 0);
+}
+}
+
 /* USER CODE END Header_StartTaskDSP */
 void StartTaskDSP(void *argument)
 {
-  /* USER CODE BEGIN StartTaskDSP */
-	uint32_t counter = 0;
-  /* Infinite loop */
+		  /* USER CODE BEGIN StartTaskDSP */
 
-	  for(;;)
-	  {
-	    SafePrintf("[DSP] alive, counter=%lu\r\n", counter++);
-	    osDelay(300);
-	  }
-  /* USER CODE END StartTaskDSP */
-}
+		  /* Filtres passe-bande PPG — un par canal optique (IR et RED) */
+		  static BandpassFilter_t ppg_filter_ir;
+		  static BandpassFilter_t ppg_filter_red;
+		  PPG_Filter_Init(&ppg_filter_ir);
+		  PPG_Filter_Init(&ppg_filter_red);
+
+		  /* Filtres adaptatifs NLMS — soustraient l'artefact de mouvement du
+		   * signal PPG en utilisant l'IMU comme référence. */
+		  static NLMS_Filter_t nlms_ir;
+		  static NLMS_Filter_t nlms_red;
+		  NLMS_Init(&nlms_ir,  0.01f);
+		  NLMS_Init(&nlms_red, 0.01f);
+
+		  /* Interpolateur IMU : magnitude de mouvement à tout instant précis,
+		   * même entre deux échantillons IMU réels (IMU 104Hz vs PPG 400Hz).
+		   * Timeline continue maintenue via imu_prev_end -- voir imu_interpolation.c */
+		  static IMU_Interp_t imu_interp;
+		  IMU_Interp_Init(&imu_interp);
+
+		  /* Buffers de réception, alloués sur la pile de la tâche. */
+		  PPG_Sample_t ppg_lot[64];          /* un lot complet de 64 échantillons PPG */
+		  IMU_Batch_t  imu_received;         /* un batch IMU (jusqu'à 17 slots)       */
+		  size_t       bytes_ppg = 0;
+
+		  /* Position d'écriture courante dans le buffer circulaire ppg_ir_buf/
+		   * ppg_red_buf (8000 cases, déclarés en variables globales du fichier). */
+		  static uint16_t ppg_win_idx = 0;
+
+		  /* Compteur total d'échantillons PPG traités depuis le démarrage. */
+		  static uint32_t ppg_count = 0;
+
+		  /* Passe à 1 définitivement une fois le buffer circulaire rempli
+		   * une première fois en entier. */
+		  static uint8_t features_armed = 0;
+
+		  /* Horodatage du dernier échantillon traité. */
+		  static uint32_t last_ppg_timestamp = 0;
+
+		  /* Compteur de cycles, pour throttler l'affichage debug (1 ligne
+		   * toutes les ~10 cycles, jamais dans la boucle des 64 echantillons). */
+		  static uint32_t dsp_cycle_counter = 0;
+
+		  for(;;)
+		  {
+		    /* ÉTAPE 1 — Attendre un lot complet de 64 échantillons PPG (bloquant).
+		     * Timeout 500ms : à 400Hz un lot de 64 se remplit en ~160-200ms → marge. */
+		    bytes_ppg = xStreamBufferReceive(
+		                    SB_PPG,
+		                    ppg_lot,
+		                    sizeof(ppg_lot),
+		                    pdMS_TO_TICKS(500));
+
+		    if (bytes_ppg == 0) {
+		        continue; /* timeout réel : capteur probablement déconnecté */
+		    }
+
+		    uint8_t ppg_ok = (bytes_ppg == sizeof(ppg_lot)) ? 1 : 0;
+		    if (!ppg_ok) {
+		        continue; /* lot incomplet/corrompu */
+		    }
+
+		    dsp_cycle_counter++;
+		    uint8_t dsp_should_print = (dsp_cycle_counter % 10 == 0);
+
+		    /* ÉTAPE 2 — Vider ENTIÈREMENT SB_IMU, non-bloquant (timeout=0).
+		     * Maintient la timeline d'interpolation IMU continue meme si le
+		     * rythme d'accumulation PPG (MAX30102) ne correspond plus 1:1 au
+		     * rythme natif de l'IMU. Ne bloque JAMAIS le traitement PPG. */
+		    uint8_t imu_batches_this_cycle = 0;
+		    while (xStreamBufferReceive(SB_IMU, &imu_received, sizeof(IMU_Batch_t), 0)
+		           == sizeof(IMU_Batch_t))
+		    {
+		        IMU_Interp_SetBatch(&imu_interp, &imu_received, 1);
+		        imu_batches_this_cycle++;
+		    }
+
+		    if (dsp_should_print) {
+		        DBG_PRINT(DEBUG_DSP, "[DSP] cycle %lu: bytes_ppg=%u, batches IMU consommes=%u\r\n",
+		                   (unsigned long)dsp_cycle_counter,
+		                   (unsigned)bytes_ppg,
+		                   (unsigned)imu_batches_this_cycle);
+		    }
+
+		    /* ÉTAPE 3 — Traiter les 64 échantillons du lot PPG.
+		     * Un seul chemin de traitement : IMU_Interp_GetMag() interroge
+		     * la timeline continue à l'instant précis de chaque échantillon. */
+		    for (uint8_t p = 0; p < 64; p++)
+		    {
+		        float mag      = IMU_Interp_GetMag(&imu_interp, ppg_lot[p].timestamp);
+		        float mag_norm = IMU_Interp_Normalize(mag);
+
+		        float ir_f  = PPG_Filter_Apply(&ppg_filter_ir,  (float)ppg_lot[p].ir);
+		        float red_f = PPG_Filter_Apply(&ppg_filter_red, (float)ppg_lot[p].red);
+
+		        float ir_clean  = NLMS_Apply(&nlms_ir,  ir_f,  mag_norm);
+		        float red_clean = NLMS_Apply(&nlms_red, red_f, mag_norm);
+
+		        DSP_StorePPGSample(ir_clean, red_clean,
+		                            (float)ppg_lot[p].ir, (float)ppg_lot[p].red,  /* <-- brut ajoute */
+		                            ppg_lot[p].timestamp,
+		                            &ppg_win_idx, &ppg_count,
+		                            &features_armed, &last_ppg_timestamp);
+		    }
+		  } /* fin for(;;) */
+
+		  /* USER CODE END StartTaskDSP */
+	}
+
 
 /* USER CODE BEGIN Header_StartTempProcess */
 /**
@@ -724,7 +1046,8 @@ void StartTempProcess(void *argument)
 	    if (temp_print_counter >= 5)
 	    {
 	        temp_print_counter = 0;
-	        SafePrintf("[TEMP_PROCESS] Sample stocke, idx=%d, skin=%.2f C, ambient=%.2f C\r\n",
+
+	        DBG_PRINT(DEBUG_TEMPPROC , "[TEMP_PROCESS] Sample stocke, idx=%d, skin=%.2f C, ambient=%.2f C\r\n",
 	                   temp_buf_idx, ts.temp_skin_c, ts.temp_ambient_c);
 	    }
 
@@ -745,13 +1068,16 @@ void StartTempProcess(void *argument)
 	      temp_buf_idx   = 76;
 	      temp_buf_ready = 1;
 
-	      SafePrintf("[TEMP_PROCESS] Buffer plein -> decalage de 3, idx repositionne a %d, temp_buf_ready=1\r\n",
+
+
+	        DBG_PRINT(DEBUG_TEMPPROC , "[TEMP_PROCESS] Buffer plein -> decalage de 3, idx repositionne a %d, temp_buf_ready=1\r\n",
 	                 temp_buf_idx);
 	    }
 	  }
   /* USER CODE END StartTempProcess */
 }
 
+/* USER CODE BEGIN Header_StartTaskFeatures */
 /* USER CODE BEGIN Header_StartTaskFeatures */
 /**
 * @brief Function implementing the TaskFeatures thread.
@@ -762,8 +1088,6 @@ void StartTempProcess(void *argument)
 /**
   * @brief  Trouve l'index dont le timestamp est le plus proche de t_ref,
   *         dans un buffer linéaire trié par ordre chronologique croissant.
-  *         Recherche à rebours depuis le plus récent (rapide en pratique :
-  *         t_ref est toujours "récent", donc peu d'itérations).
   * @retval index trouvé, ou -1 si aucun timestamp n'est dans max_gap_us
   */
 static int32_t Find_Closest_Timestamp_Index(uint32_t *ts_buf, uint16_t buf_idx,
@@ -781,18 +1105,16 @@ static int32_t Find_Closest_Timestamp_Index(uint32_t *ts_buf, uint16_t buf_idx,
         uint32_t diff = (ts_buf[i] > t_ref) ? (ts_buf[i] - t_ref) : (t_ref - ts_buf[i]);
         if (diff < best_diff)
         {
-            best_diff = diff;
+        	best_diff = diff;
             best_idx  = i;
         }
         else
         {
-            /* Buffer trié croissant → l'écart ne peut que remonter
-             * après être passé sous le minimum : on peut s'arrêter. */
             break;
         }
     }
 
-    if (best_diff > max_gap_us) return -1;   /* trop vieux → pas fiable */
+    if (best_diff > max_gap_us) return -1;
 
     return best_idx;
 }
@@ -800,88 +1122,244 @@ static int32_t Find_Closest_Timestamp_Index(uint32_t *ts_buf, uint16_t buf_idx,
 /* USER CODE END Header_StartTaskFeatures */
 void StartTaskFeatures(void *argument)
 {
-  /* USER CODE BEGIN StartTaskFeatures */
 
-    FeatureVector_t fv;
+	  /* USER CODE BEGIN StartTaskFeatures */
 
-    static float local_imu_accel[104][3];
-    static float local_imu_gyro[104][3];
+	    /* Notification envoyee par DSP_StorePPGSample (dans StartTaskDSP)
+	     * -- contient t_ref, ppg_win_idx, ppg_count. C'est le SEUL moyen
+	     * propre de recuperer ppg_win_idx, qui est une variable statique
+	     * LOCALE a StartTaskDSP, invisible ici autrement. */
+	    PPG_Notify_t notif;
 
-    for(;;)
-    {
-        /* --- TEST IMU SEUL : tick périodique 1s, t_ref pris
-         * directement sur TIM2 (pas de dépendance au PPG). --- */
-        osDelay(1000);
-        uint32_t t_ref = __HAL_TIM_GET_COUNTER(&htim2);
+	    static FeatureVector_t fv;
 
-        SafePrintf("[FEATURES] tick, t_ref=%lu us\r\n", t_ref);
+	    /* Structure intermediaire pics + intervalles R-R, partagee entre
+	     * toutes les fonctions PPG_Calc* pour eviter de recalculer les
+	     * pics plusieurs fois. static : trop grande pour la pile (~420o). */
+	    static PPG_RR_t rr;
 
-        memset(&fv, 0, sizeof(FeatureVector_t));
-        fv.t_ref = t_ref;
+	    static float local_imu_accel[104][3];
+	    static float local_imu_gyro[104][3];
 
-        /* -----------------------------------------------------
-         * FEATURES IMU
-         * ----------------------------------------------------- */
-        uint8_t imu_data_ok = 0;
+	    for(;;)
+	    {
+	        /* ÉTAPE 1 -- attendre la notification de StartTaskDSP (pas un
+	         * tick periodique) : bloque la tache, 0% CPU, jusqu'a ce que
+	         * le buffer circulaire PPG soit plein une fois (~20s a 400Hz)
+	         * puis toutes les 1s ensuite (400 echantillons = 1s a 400Hz). */
+	        if (osMessageQueueGet(Q_FEATURESHandle,
+	                              &notif,
+	                              NULL,
+	                              osWaitForever) != osOK)
+	        {
+	            continue;
+	        }
 
-        if (!imu_feat_buf_ready)
-        {
-            SafePrintf("[FEATURES] IMU buffer pas encore plein, en attente...\r\n");
-        }
-        else if (osMutexAcquire(MTX_IMU_BUFHandle, 10) == osOK)
-        {
-            int32_t idx = Find_Closest_Timestamp_Index(
-                              imu_feat_ts_buf, imu_feat_buf_idx,
-                              t_ref, 300000);
+	        DBG_PRINT(DEBUG_FEATURES, "[FEATURES] Notification recue, t_ref=%lu us, ppg_count=%lu\r\n",
+	                   (unsigned long)notif.t_ref, (unsigned long)notif.ppg_count);
 
-            SafePrintf("[FEATURES] Find_Closest_Timestamp_Index -> idx=%ld (buf_idx=%d)\r\n",
-                   idx, imu_feat_buf_idx);
+	        /* Protection defensive : le buffer doit etre plein (8000
+	         * echantillons) avant tout calcul, sinon on calculerait sur
+	         * des zeros (valeurs initiales du buffer circulaire). */
+	        if (notif.ppg_count < PPG_WINDOW_SIZE)
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] Buffer PPG pas encore plein (%lu/%d), skip\r\n",
+	                       (unsigned long)notif.ppg_count, PPG_WINDOW_SIZE);
+	            continue;
+	        }
 
-            if (idx >= 103)
-            {
-                memcpy(local_imu_accel, &imu_accel_buf[idx - 103],
-                       104 * sizeof(local_imu_accel[0]));
-                memcpy(local_imu_gyro, &imu_gyro_buf[idx - 103],
-                       104 * sizeof(local_imu_gyro[0]));
-                imu_data_ok = 1;
-            }
-            else
-            {
-                SafePrintf("[FEATURES] idx insuffisant (< 103), pas assez d'historique\r\n");
-            }
-            osMutexRelease(MTX_IMU_BUFHandle);
-        }
-        else
-        {
-            SafePrintf("[FEATURES] MTX_IMU_BUFHandle indisponible (timeout 10ms)\r\n");
-        }
+	        uint32_t t_ref = notif.t_ref;
 
-        if (imu_data_ok)
-        {
-            fv.imu_rms_accel = IMU_Calc_RMS(local_imu_accel, 104);
-            fv.imu_variance  = IMU_Calc_Var(local_imu_accel, 104);
-            fv.imu_rms_gyro  = IMU_Calc_RMSGyro(local_imu_gyro, 104);
-            fv.imu_peaks = IMU_Calc_Peaks(local_imu_accel, 104, imu_peak_threshold);
+	        /* ÉTAPE 2+3 fusionnées — copie ET réordonnancement chronologique en
+	         * une seule passe, directement depuis les buffers globaux. Évite de
+	         * dupliquer inutilement 4 tableaux de 32 Ko chacun (economie de
+	         * 128 Ko de RAM statique par rapport a la version precedente).
+	         * DEUX paires de buffers : filtre (BPM/HRV) et brut/DC (SpO2). */
+	        static float local_ir[PPG_WINDOW_SIZE];       /* filtré, ordonné -- pour BPM/HRV */
+	        static float local_red[PPG_WINDOW_SIZE];
+	        static float local_dc_ir[PPG_WINDOW_SIZE];    /* brut, ordonné -- pour SpO2 */
+	        static float local_dc_red[PPG_WINDOW_SIZE];
 
-            SafePrintf("[FEATURES] IMU OK -> rms_accel=%.3f mg, var=%.3f mg2, peaks=%.0f, rms_gyro=%.3f mdps\r\n",
-                   fv.imu_rms_accel, fv.imu_variance,
-                   fv.imu_peaks, fv.imu_rms_gyro);
-        }
-        else
-        {
-            SafePrintf("[FEATURES] IMU features non calculees (donnees indisponibles)\r\n");
-        }
+	        if (osMutexAcquire(MTX_PPG_BUFHandle, 10) == osOK)
+	        {
+	            uint16_t start = notif.ppg_win_idx;
+	            for (uint16_t i = 0; i < PPG_WINDOW_SIZE; i++)
+	            {
+	                uint16_t idx = (start + i) % PPG_WINDOW_SIZE;
+	                local_ir[i]     = ppg_ir_buf[idx];
+	                local_red[i]    = ppg_red_buf[idx];
+	                local_dc_ir[i]  = ppg_ir_raw_buf[idx];
+	                local_dc_red[i] = ppg_red_raw_buf[idx];
+	            }
+	            osMutexRelease(MTX_PPG_BUFHandle);
 
-        /* -----------------------------------------------------
-         * TOUT LE RESTE COMMENTÉ POUR CE TEST (PPG, EMG, TEMP,
-         * envoi vers Q_RESULTSHandle) — à réactiver plus tard.
-         * ----------------------------------------------------- */
+	            /* DEBUG : verification que les 2 paires de buffers contiennent
+	             * bien des donnees DIFFERENTES -- filtre proche de 0 (DC retire),
+	             * brut proche de la vraie amplitude ADC (DC preserve). A retirer
+	             * une fois le mecanisme confirme fonctionnel. */
+	            DBG_PRINT(DEBUG_FEATURES,
+	                       "[FEATURES] Verif buffers -> filtre[0]=%.2f brut[0]=%.0f | filtre[100]=%.2f brut[100]=%.0f\r\n",
+	                       local_ir[0], local_dc_ir[0],
+	                       local_ir[100], local_dc_ir[100]);
+	        }
+	        else
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] MTX_PPG_BUFHandle indisponible (timeout 10ms), skip\r\n");
+	            continue;
+	        }
 
-    } /* fin for(;;) */
+	        /* Reinitialisation de fv A CHAQUE cycle -- sans ce memset, un
+	         * champ non recalcule ce tour-ci (ex: BPM si rr.n_rr<2) garderait
+	         * silencieusement la valeur du cycle PRECEDENT au lieu de 0,
+	         * donnant une fausse impression de continuite. */
+	        memset(&fv, 0, sizeof(FeatureVector_t));
+	        fv.t_ref     = t_ref;
+	        fv.ppg_count = notif.ppg_count;
 
-  /* USER CODE END StartTaskFeatures */
+	        /* -----------------------------------------------------
+	         * FEATURES PPG (8 features)
+	         * ----------------------------------------------------- */
+	        PPG_DetectPeaks(local_ir, PPG_WINDOW_SIZE, &rr);   /* filtré : detection de pics */
+	        PPG_CalcRR(&rr);
+
+	        DBG_PRINT(DEBUG_FEATURES, "[FEATURES] PPG_DetectPeaks -> n_peaks=%d n_rr=%d\r\n",
+	                   rr.n_peaks, rr.n_rr);
+
+	        if (rr.n_rr >= 2)
+	        {
+	            fv.ppg_bpm   = PPG_CalcBPM(&rr);
+	            fv.ppg_sdnn  = PPG_CalcSDNN(&rr);
+	            fv.ppg_rmssd = PPG_CalcRMSSD(&rr);
+	            fv.ppg_pnn50 = PPG_CalcPNN50(&rr);
+	            fv.ppg_lf_hf = PPG_CalcLFHF(&rr);
+	        }
+	        else
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] n_rr insuffisant (< 2) -> BPM/SDNN/RMSSD/pNN50/LFHF a 0\r\n");
+	        }
+
+	        fv.ppg_spo2      = PPG_CalcSpO2(local_dc_ir, local_dc_red, PPG_WINDOW_SIZE);  /* brut, pas filtré */
+	        fv.ppg_amplitude = PPG_CalcAmplitude(local_ir, PPG_WINDOW_SIZE);
+	        fv.ppg_skewness  = PPG_CalcSkewness(local_ir, PPG_WINDOW_SIZE);
+
+	        DBG_PRINT(DEBUG_FEATURES,
+	                   "[FEATURES] PPG OK -> BPM=%.1f SDNN=%.1fms RMSSD=%.1fms pNN50=%.1f%% LF/HF=%.2f SpO2=%.1f%% Amp=%.1f Skew=%.2f (n_peaks=%d)\r\n",
+	                   fv.ppg_bpm, fv.ppg_sdnn, fv.ppg_rmssd, fv.ppg_pnn50,
+	                   fv.ppg_lf_hf, fv.ppg_spo2, fv.ppg_amplitude, fv.ppg_skewness,
+	                   rr.n_peaks);
+
+	        /* -----------------------------------------------------
+	         * FEATURES IMU (4 features), synchronisees sur t_ref
+	         * ----------------------------------------------------- */
+	        uint8_t imu_data_ok = 0;
+
+	        if (!imu_feat_buf_ready)
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU buffer pas encore plein, en attente...\r\n");
+	        }
+	        else if (osMutexAcquire(MTX_IMU_BUFHandle, 10) == osOK)
+	        {
+	            int32_t idx = Find_Closest_Timestamp_Index(
+	                              imu_feat_ts_buf, imu_feat_buf_idx,
+	                              t_ref, 300000);
+
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU Find_Closest_Timestamp_Index -> idx=%ld (buf_idx=%d)\r\n",
+	                   idx, imu_feat_buf_idx);
+
+	            if (idx >= 103)
+	            {
+	                memcpy(local_imu_accel, &imu_accel_buf[idx - 103],
+	                       104 * sizeof(local_imu_accel[0]));
+	                memcpy(local_imu_gyro, &imu_gyro_buf[idx - 103],
+	                       104 * sizeof(local_imu_gyro[0]));
+	                imu_data_ok = 1;
+	            }
+	            else
+	            {
+	                DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU idx insuffisant (< 103), pas assez d'historique\r\n");
+	            }
+	            osMutexRelease(MTX_IMU_BUFHandle);
+	        }
+	        else
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] MTX_IMU_BUFHandle indisponible (timeout 10ms)\r\n");
+	        }
+
+	        if (imu_data_ok)
+	        {
+	            fv.imu_rms_accel = IMU_Calc_RMS(local_imu_accel, 104);
+	            fv.imu_variance  = IMU_Calc_Var(local_imu_accel, 104);
+	            fv.imu_rms_gyro  = IMU_Calc_RMSGyro(local_imu_gyro, 104);
+	            fv.imu_peaks     = IMU_Calc_Peaks(local_imu_accel, 104, imu_peak_threshold);
+
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU OK -> rms_accel=%.3f mg, var=%.3f mg2, peaks=%.0f, rms_gyro=%.3f mdps\r\n",
+	                   fv.imu_rms_accel, fv.imu_variance,
+	                   fv.imu_peaks, fv.imu_rms_gyro);
+	        }
+	        else
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU features non calculees (donnees indisponibles)\r\n");
+	        }
+
+	        /* -----------------------------------------------------
+	         * FEATURES TEMPÉRATURE (4 features)
+	         * ----------------------------------------------------- */
+	        static float local_temp_skin[TEMP_BUF_SIZE];
+	        static float local_temp_ambient[TEMP_BUF_SIZE];
+	        uint8_t temp_data_ok = 0;
+
+	        if (!temp_buf_ready)
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP buffer pas encore plein (31s), en attente...\r\n");
+	        }
+	        else
+	        {
+	            int32_t idx = Find_Closest_Timestamp_Index(
+	                              temp_ts_buf, temp_buf_idx,
+	                              t_ref, 2000000);
+
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP Find_Closest_Timestamp_Index -> idx=%ld (buf_idx=%d)\r\n",
+	                       idx, temp_buf_idx);
+
+	            if (idx >= (TEMP_WIN_LONG - 1))
+	            {
+	                memcpy(local_temp_skin, &temp_skin_buf[idx - (TEMP_WIN_LONG - 1)],
+	                       TEMP_WIN_LONG * sizeof(float));
+	                memcpy(local_temp_ambient, &temp_ambient_buf[idx - (TEMP_WIN_LONG - 1)],
+	                       TEMP_WIN_LONG * sizeof(float));
+	                temp_data_ok = 1;
+	            }
+	            else
+	            {
+	                DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP idx insuffisant (< %d), pas assez d'historique\r\n",
+	                           TEMP_WIN_LONG - 1);
+	            }
+	        }
+
+	        if (temp_data_ok)
+	        {
+	            fv.temp_mean     = Temp_Calc_Mean(local_temp_skin, TEMP_WIN_LONG);
+	            fv.temp_delta    = Temp_Calc_Delta(local_temp_skin, local_temp_ambient, TEMP_WIN_LONG);
+	            fv.temp_drift    = Temp_Calc_Drift(local_temp_skin, TEMP_WIN_LONG, TEMP_FS);
+	            fv.temp_variance = Temp_Calc_Var(local_temp_skin, TEMP_WIN_LONG);
+
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP OK -> mean=%.2f C, delta=%.2f C, drift=%.4f C/s, var=%.4f C2\r\n",
+	                       fv.temp_mean, fv.temp_delta, fv.temp_drift, fv.temp_variance);
+	        }
+	        else
+	        {
+	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP features non calculees (donnees indisponibles)\r\n");
+	        }
+
+	        /* -----------------------------------------------------
+	         * RESTE COMMENTÉ POUR CE TEST (EMG, envoi vers
+	         * Q_RESULTSHandle) — à réactiver plus tard.
+	         * ----------------------------------------------------- */
+
+	    } /* fin for(;;) */
+
+	  /* USER CODE END StartTaskFeatures */
 }
-
 /* USER CODE BEGIN Header_StartEMGProcess */
 /**
 * @brief Function implementing the vTaskEMGProcess thread.
@@ -892,12 +1370,13 @@ void StartTaskFeatures(void *argument)
 void StartEMGProcess(void *argument)
 {
   /* USER CODE BEGIN StartEMGProcess */
-	uint32_t counter = 0;
+
   /* Infinite loop */
 
 	  for(;;)
 	  {
-	    SafePrintf("[EMG_PROCESS] alive, counter=%lu\r\n", counter++);
+
+
 	    osDelay(1000);
 	  }
   /* USER CODE END StartEMGProcess */
@@ -913,13 +1392,43 @@ void StartEMGProcess(void *argument)
 void StartTaskLoRa(void *argument)
 {
   /* USER CODE BEGIN StartTaskLoRa */
-  /* Infinite loop */
-	 uint32_t counter = 0;
-	  for(;;)
-	  {
-	    SafePrintf("[LORA] alive, counter=%lu\r\n", counter++);
-	    osDelay(3000);
-	  }
+
+
+	 osThreadSuspend(osThreadGetId());
+
+  LoRaMessage_t msg;
+  DBG_PRINT(DEBUG_LORA , "\r\n\r\n########## AVANT LoRa_Init ##########\r\n\r\n");
+
+  int lora_status = LoRa_Init();
+
+  DBG_PRINT(DEBUG_LORA ,"\r\n\r\n########## APRES LoRa_Init, status=%d ##########\r\n\r\n", lora_status);
+  for(;;)
+  {
+    if (osMessageQueueGet(loraTxQueueHandle, &msg, NULL, osWaitForever) == osOK)
+    {
+      osMutexAcquire(loraRadioMutexHandle, osWaitForever);
+
+      int sendResult = LoRa_Send((uint8_t*)&msg, sizeof(msg));
+      if (sendResult == 0)
+      {
+        if (LoRa_WaitDone(3000))
+        {
+          printf("[LoRa-Routine] TX confirme, porteur=%lu classe=%d conf=%.2f\r\n",
+                 msg.porteur_id, msg.classe, msg.confiance);
+        }
+        else
+        {
+          printf("[LoRa-Routine] TX timeout\r\n");
+        }
+      }
+      else
+      {
+        printf("[LoRa-Routine] Echec envoi, code=%d\r\n", sendResult);
+      }
+
+      osMutexRelease(loraRadioMutexHandle);
+    }
+  }
   /* USER CODE END StartTaskLoRa */
 }
 
@@ -932,7 +1441,7 @@ void StartTaskLoRa(void *argument)
 /* USER CODE END Header_StartIMUProcessTask */
 void StartIMUProcessTask(void *argument)
 {
-	/* USER CODE BEGIN StartIMUProcessTask */
+  /* USER CODE BEGIN StartIMUProcessTask */
 	  IMU_Feature_Batch_t feature_batch;
 
 	  for(;;)
@@ -973,7 +1482,8 @@ void StartIMUProcessTask(void *argument)
 	                    imu_peak_threshold = IMU_Calibrate_PeakThreshold(
 	                                              &imu_accel_buf[104], 104, 2.0f);
 	                    imu_peak_threshold_ready = 1;
-	                    SafePrintf("[IMU_PROCESS] Seuil de pics calibre: %.3f mg (capteur suppose immobile)\r\n",
+
+	                    DBG_PRINT(DEBUG_IMUPROC ,"[IMU_PROCESS] Seuil de pics calibre: %.3f mg (capteur suppose immobile)\r\n",
 	                               imu_peak_threshold);
 	                }
 
@@ -988,12 +1498,97 @@ void StartIMUProcessTask(void *argument)
 	                imu_feat_buf_ready = 1;
 	            }
 	        }
-	        SafePrintf("[IMU_PROCESS] Batch reçu, count=%d, idx=%d\r\n",
-	               feature_batch.count, imu_feat_buf_idx);
+	        DBG_PRINT(DEBUG_IMUPROC ,"[IMU_PROCESS] Batch reçu, count=%d, idx=%d\r\n",
+		               feature_batch.count, imu_feat_buf_idx);
+
 	        osMutexRelease(MTX_IMU_BUFHandle);
 	    }
 	  }
-	  /* USER CODE END StartIMUProcessTask */
+  /* USER CODE END StartIMUProcessTask */
+}
+
+/* USER CODE BEGIN Header_TaskLoRaEmergency */
+/**
+* @brief Function implementing the VTaskLoRaEmerge thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_TaskLoRaEmergency */
+void TaskLoRaEmergency(void *argument)
+{
+  /* USER CODE BEGIN TaskLoRaEmergency */
+	 osThreadSuspend(osThreadGetId());
+  LoRaMessage_t msg;
+
+  for(;;)
+  {
+    if (osMessageQueueGet(loraEmergencyQueueHandle, &msg, NULL, osWaitForever) == osOK)
+    {
+      osMutexAcquire(loraRadioMutexHandle, osWaitForever);
+
+      SafePrintf("[LoRa-URGENCE] Envoi immediat, porteur=%lu conf=%.2f\r\n",
+             msg.porteur_id, msg.confiance);
+
+      int sendResult = LoRa_Send((uint8_t*)&msg, sizeof(msg));
+      if (sendResult == 0)
+      {
+        if (LoRa_WaitDone(3000))
+        {
+          SafePrintf("[LoRa-URGENCE] TX confirme\r\n");
+        }
+        else
+        {
+          SafePrintf("[LoRa-URGENCE] TX timeout\r\n");
+        }
+      }
+      else
+      {
+        SafePrintf("[LoRa-URGENCE] Echec envoi, code=%d\r\n", sendResult);
+      }
+
+      osMutexRelease(loraRadioMutexHandle);
+    }
+  }  // ← ACCOLADE MANQUANTE AJOUTÉE ICI (ferme le for(;;))
+  /* USER CODE END TaskLoRaEmergency */
+}
+
+/* USER CODE BEGIN Header_StartTaskInferenceIA */
+/**
+* @brief Function implementing the vTaskInferenceI thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTaskInferenceIA */
+void StartTaskInferenceIA(void *argument)
+{
+  /* USER CODE BEGIN StartTaskInferenceIA */
+	 osThreadSuspend(osThreadGetId());
+	  LoRaMessage_t alert;
+	  uint8_t testCounter = 0;
+
+	  for(;;)
+	  {
+	    alert.porteur_id = 1;
+	    alert.classe = (testCounter % 3 == 0) ? 1 : 0;
+	    alert.confiance = (alert.classe == 1) ? 0.85f : 0.95f;
+	    testCounter++;
+
+	    if (alert.classe == 1)
+	    {
+	      osMessageQueuePut(loraEmergencyQueueHandle, &alert, 0, osWaitForever);
+	      printf("[InferenceIA] Message envoye vers EMERGENCY (classe=%d, conf=%.2f)\r\n",
+	             alert.classe, alert.confiance);
+	    }
+	    else
+	    {
+	      osMessageQueuePut(loraTxQueueHandle, &alert, 0, osWaitForever);
+	      printf("[InferenceIA] Message envoye vers ROUTINE (classe=%d, conf=%.2f)\r\n",
+	             alert.classe, alert.confiance);
+	    }
+
+	    osDelay(pdMS_TO_TICKS(2000));
+	  }  // ← ACCOLADE MANQUANTE AJOUTÉE ICI (ferme le for(;;))
+  /* USER CODE END StartTaskInferenceIA */
 }
 
 /* Private application code --------------------------------------------------*/

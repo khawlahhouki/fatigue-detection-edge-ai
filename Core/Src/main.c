@@ -33,6 +33,8 @@
 #include "safe_printf.h"
 #include "tmp117.h"
 #include "shtc3.h"
+#include "max30102.h"
+#include "lora_interface.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -111,19 +113,19 @@ int main(void)
   MX_SPI3_Init();
   MX_TIM2_Init();
   MX_SPI4_Init();
+  MX_I2C4_Init();
 
   /* Initialize interrupts */
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
-
-
+  printf("=== DEMARRAGE ===");
   if (LSM6DSO_IMU_Init(&hspi4, CS_IMU_GPIO_Port, CS_IMU_Pin) != LSM6DSO_IMU_OK)
       {
-        SafePrintf("[LSM6DSO] INIT FAILED\r\n");
+        printf("[LSM6DSO] INIT FAILED\r\n");
       }
       else
       {
-        SafePrintf("[LSM6DSO] Init OK\r\n");
+        printf("[LSM6DSO] Init OK\r\n");
 
       }
   /* --- Initialisation et vérification TMP117 + SHTC3 (I2C1) --- */
@@ -135,34 +137,35 @@ int main(void)
   {
       if (getDeviceID(&hi2c1, tmp117_init_buf, &tmp117_id) && tmp117_id == 0x0117)
       {
-          SafePrintf("[TEMP] TMP117 OK, device ID=0x%04X\r\n", tmp117_id);
+          printf("[TEMP] TMP117 OK, device ID=0x%04X\r\n", tmp117_id);
       }
       else
       {
-          SafePrintf("[TEMP] TMP117 ID INATTENDU (id=0x%04X, attendu 0x0117)\r\n", tmp117_id);
+          printf("[TEMP] TMP117 ID INATTENDU (id=0x%04X, attendu 0x0117)\r\n", tmp117_id);
       }
   }
   else
   {
-      SafePrintf("[TEMP] TMP117 INIT FAILED\r\n");
+      printf("[TEMP] TMP117 INIT FAILED\r\n");
   }
 
   shtc3_id = shtc3_read_id(&hi2c1);
   if (shtc3_id != 0)
   {
-      SafePrintf("[TEMP] SHTC3 OK, device ID=0x%04X\r\n", shtc3_id);
+     printf("[TEMP] SHTC3 OK, device ID=0x%04X\r\n", shtc3_id);
   }
   else
   {
-      SafePrintf("[TEMP] SHTC3 INIT FAILED (id=0)\r\n");
+      printf("[TEMP] SHTC3 INIT FAILED (id=0)\r\n");
   }
-  // LoRa_SemaphoreInit();   ← à supprimer
-  int lora_status = LoRa_Init();
-  if (lora_status == 0) {
-      SafePrintf("[LoRa] Init OK\r\n");
-  } else {
-      SafePrintf("[LoRa] Init FAILED, code=%d\r\n", lora_status);
-  }
+
+  if (!MAX30102_Init(&hi2c4)) {
+	printf("[BOOT] MAX30102 (PPG)  ... ECHEC -- verifier I2C4 (PF14/PF15) / 3V3 / GND\r\n");
+
+  } else { printf("[BOOT] MAX30102 (PPG)  ... OK\r\n"); }
+
+
+
   /* USER CODE END 2 */
 
   /* Init scheduler */

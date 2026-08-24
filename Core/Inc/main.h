@@ -64,10 +64,10 @@ void Error_Handler(void);
 #define DRDY_EMG_EXTI_IRQn EXTI4_IRQn
 #define START_EMG_Pin GPIO_PIN_5
 #define START_EMG_GPIO_Port GPIOE
+#define DIO0_Pin GPIO_PIN_1
+#define DIO0_GPIO_Port GPIOF
 #define CS_EMG_Pin GPIO_PIN_0
 #define CS_EMG_GPIO_Port GPIOA
-#define DIO0_Pin GPIO_PIN_1
-#define DIO0_GPIO_Port GPIOB
 #define RESET_EMG_Pin GPIO_PIN_7
 #define RESET_EMG_GPIO_Port GPIOE
 #define INT_PPG_Pin GPIO_PIN_8

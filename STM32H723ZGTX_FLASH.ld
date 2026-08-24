@@ -7,7 +7,6 @@
 **
 **  Abstract    : Linker script for STM32H7 series
 **                1024Kbytes FLASH and 560Kbytes RAM
-**
 **                Set heap size, stack size and stack location according
 **                to application requirements.
 **
@@ -155,6 +154,13 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM_D1
 
+  .ram_d2 (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.ram_d2)
+    *(.ram_d2*)
+    . = ALIGN(4);
+  } >RAM_D2
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
   {

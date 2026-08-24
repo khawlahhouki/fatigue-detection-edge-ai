@@ -7,7 +7,8 @@
 
 #include "ppg_features.h"
 #include <math.h>     /* sqrtf, fabsf, powf */
-#include <string.h>   /* memset             */
+#include <string.h>   /* memset   */
+#include "debug_config.h"
 
 /* =============================================================
  * FONCTIONS UTILITAIRES PRIVÉES (static)
@@ -301,49 +302,47 @@ float PPG_CalcSpO2(const float *ir,
     if (ir == NULL || red == NULL || N < 10)
         return 0.0f;
 
-    /* --- Calculer AC et DC pour les deux canaux ---
-     * DC = moyenne du signal (composante continue)
-     * AC = écart-type × 2 ≈ amplitude pulsatile               */
-    float dc_ir  = 0.0f, dc_red = 0.0f;
-    float max_ir = ir[0],  min_ir = ir[0];
-    float max_red = red[0], min_red = red[0];
+    float dc_ir = 0.0f, dc_red = 0.0f;
 
     for (uint16_t i = 0; i < N; i++)
     {
         dc_ir  += ir[i];
         dc_red += red[i];
-        if (ir[i]  > max_ir)  max_ir  = ir[i];
-        if (ir[i]  < min_ir)  min_ir  = ir[i];
-        if (red[i] > max_red) max_red = red[i];
-        if (red[i] < min_red) min_red = red[i];
     }
     dc_ir  /= (float)N;
     dc_red /= (float)N;
 
-    float ac_ir  = max_ir  - min_ir;
-    float ac_red = max_red - min_red;
+    /* AC = ecart-type, robuste face a un artefact ponctuel isole,
+     * contrairement a max-min qui capture n'importe quelle excursion
+     * unique sur toute la fenetre (voir diagnostic SPO2_DEBUG). */
+    float var_ir = 0.0f, var_red = 0.0f;
+    for (uint16_t i = 0; i < N; i++)
+    {
+        float d_ir  = ir[i]  - dc_ir;
+        float d_red = red[i] - dc_red;
+        var_ir  += d_ir  * d_ir;
+        var_red += d_red * d_red;
+    }
+    var_ir  /= (float)N;
+    var_red /= (float)N;
 
-    /* Protection division par zéro                              */
+    float ac_ir  = sqrtf(var_ir)  * 2.0f;
+    float ac_red = sqrtf(var_red) * 2.0f;
+
     if (dc_ir  < PPG_EPSILON) return 0.0f;
     if (dc_red < PPG_EPSILON) return 0.0f;
     if (ac_ir  < PPG_EPSILON) return 0.0f;
 
-    /* --- Ratio R ---
-     * R = (AC_red / DC_red) / (AC_ir / DC_ir)                 */
     float R = (ac_red / dc_red) / (ac_ir / dc_ir);
 
-    /* --- Formule empirique SpO2 ---
-     * SpO2 = 110 - 25×R
-     * R=0.4 → SpO2=100%  R=1.0 → SpO2=85%                    */
     float spo2 = 110.0f - 25.0f * R;
-
-    /* Clamp physiologique : 70% à 100%                         */
+    DBG_PRINT(DEBUG_FEATURES ,"[SPO2_DEBUG] dc_ir=%.1f dc_red=%.1f ac_ir=%.1f ac_red=%.1f R=%.3f spo2_brut=%.1f\r\n",
+             dc_ir, dc_red, ac_ir, ac_red, R, spo2);
     if (spo2 < 70.0f)  spo2 = 70.0f;
     if (spo2 > 100.0f) spo2 = 100.0f;
 
     return spo2;
 }
-
 /* =============================================================
  * PPG_CalcAmplitude
  * ============================================================= */

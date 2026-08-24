@@ -6,6 +6,7 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
 #include <math.h>
 #include "imu_features.h"
 
@@ -138,4 +139,24 @@ float IMU_Calc_RMSGyro(float gyro[][3], uint16_t n)
 {
     /* Même calcul que IMU_Calc_RMS, appliqué au gyroscope. */
     return IMU_Calc_RMS(gyro, n);
+}
+
+void IMU_Calc_MeanXYZ(float accel[][3], uint16_t n,
+                       float *mean_x, float *mean_y, float *mean_z)
+{
+    if (n == 0 || mean_x == NULL || mean_y == NULL || mean_z == NULL)
+    {
+        return;
+    }
+
+    float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+    for (uint16_t i = 0; i < n; i++)
+    {
+        sx += accel[i][0];
+        sy += accel[i][1];
+        sz += accel[i][2];
+    }
+    *mean_x = sx / (float)n;
+    *mean_y = sy / (float)n;
+    *mean_z = sz / (float)n;
 }

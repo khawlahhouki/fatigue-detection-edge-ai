@@ -46,7 +46,7 @@
 #include "lora_interface.h"
 #include "max30102.h"
 #include "debug_config.h"
-
+#include "user_profile.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,43 +64,23 @@ typedef struct {
 } PPG_Sample_t;
 
 typedef struct {
+    /* --- Capteurs, calculés à chaque fenêtre de 1s --- */
+    float acc_x, acc_y, acc_z;   /* mg, moyenne sur la fenêtre IMU */
+    float wrist_hr;               /* bpm — nécessite PPG réactivé */
+    float ibi;                    /* ms — nécessite PPG réactivé */
+    float temp;                   /* °C, température peau */
+    float temp_amb;               /* °C, température ambiante */
+    float hum_amb;                /* %, humidité ambiante */
+    float breathing_rpm;          /* resp/min — nécessite PPG réactivé */
 
-    /* --- PPG : 8 features --- */
-    float ppg_bpm;          /* Fréquence cardiaque (bpm)          */
-    float ppg_sdnn;         /* Écart-type intervalles R-R (ms)    */
-    float ppg_rmssd;        /* Racine carrée diff. R-R (ms)       */
-    float ppg_pnn50;        /* Proportion écarts R-R > 50ms (%)   */
-    float ppg_lf_hf;        /* Ratio puissances LF/HF             */
-    float ppg_spo2;         /* Saturation oxygène (%)             */
-    float ppg_amplitude;    /* Amplitude crête-à-crête moyenne    */
-    float ppg_skewness;     /* Asymétrie du signal                */
+    /* --- Profil utilisateur, copié depuis user_profile (saisie unique) --- */
+    float age, gender, reserved, generally_trusting, lazy,
+          relaxed_handless_stress, few_artistic_interests, sociable,
+          criticize_others, thorough_job, easily_nervous, active_magination,
+          phisical_fitness, cardiorespiratory_fitness, muscular_strength,
+          agility_speed, flexibility, cardiovascular_health_conditions;
 
-    /* --- IMU : 4 features --- */
-    float imu_rms_accel;    /* RMS accélération (mg)              */
-    float imu_variance;     /* Variance accélération              */
-    float imu_peaks;        /* Nombre pics mouvement / seconde    */
-    float imu_rms_gyro;     /* RMS gyroscope (dps)                */
-
-    /* --- EMG : 8 features --- */
-    float emg_rms_ch1;      /* RMS canal 1                        */
-    float emg_rms_ch2;      /* RMS canal 2                        */
-    float emg_mav_ch1;      /* Mean Absolute Value canal 1        */
-    float emg_mav_ch2;      /* Mean Absolute Value canal 2        */
-    float emg_iemg_ch1;     /* Intégrale EMG canal 1              */
-    float emg_iemg_ch2;     /* Intégrale EMG canal 2              */
-    float emg_mdf;          /* Fréquence médiane (Hz)             */
-    float emg_mnf;          /* Fréquence moyenne (Hz)             */
-
-    /* --- Température : 4 features --- */
-    float temp_mean;        /* Température peau moyenne (°C)      */
-    float temp_delta;       /* Écart peau - ambiante (°C)         */
-    float temp_drift;       /* Dérive temporelle (°C/s)           */
-    float temp_variance;    /* Variance température               */
-
-    /* --- Métadonnées --- */
-    uint32_t t_ref;         /* Ancre temporelle de cette fenêtre  */
-    uint32_t ppg_count;     /* Compteur total samples PPG         */
-
+    uint32_t t_ref;
 } FeatureVector_t;
 /* sizeof(FeatureVector_t) = 24×4 + 4 + 4 = 104 octets         */
 /* USER CODE END PTD */
@@ -1213,144 +1193,165 @@ void StartTaskFeatures(void *argument)
 	         * silencieusement la valeur du cycle PRECEDENT au lieu de 0,
 	         * donnant une fausse impression de continuite. */
 	        memset(&fv, 0, sizeof(FeatureVector_t));
-	        fv.t_ref     = t_ref;
-	        fv.ppg_count = notif.ppg_count;
+	                fv.t_ref     = t_ref;
 
-	        /* -----------------------------------------------------
-	         * FEATURES PPG (8 features)
-	         * ----------------------------------------------------- */
-	        PPG_DetectPeaks(local_ir, PPG_WINDOW_SIZE, &rr);   /* filtré : detection de pics */
-	        PPG_CalcRR(&rr);
+	                /* -----------------------------------------------------
+	                 * PPG — seulement wrist_hr et ibi sont retenus dans la
+	                 * nouvelle liste de features (spo2/sdnn/rmssd/pnn50/lf_hf/
+	                 * amplitude/skewness ne sont plus demandés). ppg_count
+	                 * n'existe plus non plus dans FeatureVector_t.
+	                 * ----------------------------------------------------- */
+	                PPG_DetectPeaks(local_ir, PPG_WINDOW_SIZE, &rr);   /* filtré : detection de pics */
+	                PPG_CalcRR(&rr);
 
-	        DBG_PRINT(DEBUG_FEATURES, "[FEATURES] PPG_DetectPeaks -> n_peaks=%d n_rr=%d\r\n",
-	                   rr.n_peaks, rr.n_rr);
+	                DBG_PRINT(DEBUG_FEATURES, "[FEATURES] PPG_DetectPeaks -> n_peaks=%d n_rr=%d\r\n",
+	                           rr.n_peaks, rr.n_rr);
 
-	        if (rr.n_rr >= 2)
-	        {
-	            fv.ppg_bpm   = PPG_CalcBPM(&rr);
-	            fv.ppg_sdnn  = PPG_CalcSDNN(&rr);
-	            fv.ppg_rmssd = PPG_CalcRMSSD(&rr);
-	            fv.ppg_pnn50 = PPG_CalcPNN50(&rr);
-	            fv.ppg_lf_hf = PPG_CalcLFHF(&rr);
-	        }
-	        else
-	        {
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] n_rr insuffisant (< 2) -> BPM/SDNN/RMSSD/pNN50/LFHF a 0\r\n");
-	        }
+	                if (rr.n_rr >= 2)
+	                {
+	                    float bpm = PPG_CalcBPM(&rr);
+	                    fv.wrist_hr = bpm;
+	                    /* IBI (ms) = 60000 / HR(bpm) — intervalle moyen inter-battements */
+	                    fv.ibi = (bpm > 0.0f) ? (60000.0f / bpm) : 0.0f;
 
-	        fv.ppg_spo2      = PPG_CalcSpO2(local_dc_ir, local_dc_red, PPG_WINDOW_SIZE);  /* brut, pas filtré */
-	        fv.ppg_amplitude = PPG_CalcAmplitude(local_ir, PPG_WINDOW_SIZE);
-	        fv.ppg_skewness  = PPG_CalcSkewness(local_ir, PPG_WINDOW_SIZE);
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] PPG OK -> wrist_hr=%.1f bpm, ibi=%.1f ms (n_peaks=%d)\r\n",
+	                               fv.wrist_hr, fv.ibi, rr.n_peaks);
+	                }
+	                else
+	                {
+	                    fv.wrist_hr = 0.0f;
+	                    fv.ibi      = 0.0f;
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] n_rr insuffisant (< 2) -> wrist_hr/ibi a 0\r\n");
+	                }
 
-	        DBG_PRINT(DEBUG_FEATURES,
-	                   "[FEATURES] PPG OK -> BPM=%.1f SDNN=%.1fms RMSSD=%.1fms pNN50=%.1f%% LF/HF=%.2f SpO2=%.1f%% Amp=%.1f Skew=%.2f (n_peaks=%d)\r\n",
-	                   fv.ppg_bpm, fv.ppg_sdnn, fv.ppg_rmssd, fv.ppg_pnn50,
-	                   fv.ppg_lf_hf, fv.ppg_spo2, fv.ppg_amplitude, fv.ppg_skewness,
-	                   rr.n_peaks);
+	                fv.breathing_rpm = 0.0f;  /* TODO: nécessite une fonction dédiée d'estimation
+	                                            * de fréquence respiratoire par variation
+	                                            * d'amplitude PPG (filtrage passe-bas de
+	                                            * l'enveloppe + comptage de pics dans la
+	                                            * bande 0.1-0.5 Hz). Pas encore écrite. */
 
-	        /* -----------------------------------------------------
-	         * FEATURES IMU (4 features), synchronisees sur t_ref
-	         * ----------------------------------------------------- */
-	        uint8_t imu_data_ok = 0;
+	                /* -----------------------------------------------------
+	                 * FEATURES TEMPÉRATURE — calculée AVANT son utilisation,
+	                 * les déclarations static doivent précéder leur usage
+	                 * dans le même bloc (règle du C).
+	                 * ----------------------------------------------------- */
+	                static float local_temp_skin[TEMP_BUF_SIZE];
+	                static float local_temp_ambient[TEMP_BUF_SIZE];
+	                uint8_t temp_data_ok = 0;
 
-	        if (!imu_feat_buf_ready)
-	        {
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU buffer pas encore plein, en attente...\r\n");
-	        }
-	        else if (osMutexAcquire(MTX_IMU_BUFHandle, 10) == osOK)
-	        {
-	            int32_t idx = Find_Closest_Timestamp_Index(
-	                              imu_feat_ts_buf, imu_feat_buf_idx,
-	                              t_ref, 300000);
+	                if (!temp_buf_ready)
+	                {
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP buffer pas encore plein (31s), en attente...\r\n");
+	                }
+	                else
+	                {
+	                    int32_t idx = Find_Closest_Timestamp_Index(
+	                                      temp_ts_buf, temp_buf_idx,
+	                                      t_ref, 2000000);
 
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU Find_Closest_Timestamp_Index -> idx=%ld (buf_idx=%d)\r\n",
-	                   idx, imu_feat_buf_idx);
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP Find_Closest_Timestamp_Index -> idx=%ld (buf_idx=%d)\r\n",
+	                               idx, temp_buf_idx);
 
-	            if (idx >= 103)
-	            {
-	                memcpy(local_imu_accel, &imu_accel_buf[idx - 103],
-	                       104 * sizeof(local_imu_accel[0]));
-	                memcpy(local_imu_gyro, &imu_gyro_buf[idx - 103],
-	                       104 * sizeof(local_imu_gyro[0]));
-	                imu_data_ok = 1;
-	            }
-	            else
-	            {
-	                DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU idx insuffisant (< 103), pas assez d'historique\r\n");
-	            }
-	            osMutexRelease(MTX_IMU_BUFHandle);
-	        }
-	        else
-	        {
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] MTX_IMU_BUFHandle indisponible (timeout 10ms)\r\n");
-	        }
+	                    if (idx >= (TEMP_WIN_LONG - 1))
+	                    {
+	                        memcpy(local_temp_skin, &temp_skin_buf[idx - (TEMP_WIN_LONG - 1)],
+	                               TEMP_WIN_LONG * sizeof(float));
+	                        memcpy(local_temp_ambient, &temp_ambient_buf[idx - (TEMP_WIN_LONG - 1)],
+	                               TEMP_WIN_LONG * sizeof(float));
+	                        temp_data_ok = 1;
+	                    }
+	                    else
+	                    {
+	                        DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP idx insuffisant (< %d), pas assez d'historique\r\n",
+	                                   TEMP_WIN_LONG - 1);
+	                    }
+	                }
 
-	        if (imu_data_ok)
-	        {
-	            fv.imu_rms_accel = IMU_Calc_RMS(local_imu_accel, 104);
-	            fv.imu_variance  = IMU_Calc_Var(local_imu_accel, 104);
-	            fv.imu_rms_gyro  = IMU_Calc_RMSGyro(local_imu_gyro, 104);
-	            fv.imu_peaks     = IMU_Calc_Peaks(local_imu_accel, 104, imu_peak_threshold);
+	                if (temp_data_ok)
+	                {
+	                    fv.temp     = Temp_Calc_Mean(local_temp_skin, TEMP_WIN_LONG);
+	                    fv.temp_amb = Temp_Calc_Mean(local_temp_ambient, TEMP_WIN_LONG);
+	                    fv.hum_amb  = 0.0f; /* TODO: humidité pas encore stockée dans un buffer glissant */
 
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU OK -> rms_accel=%.3f mg, var=%.3f mg2, peaks=%.0f, rms_gyro=%.3f mdps\r\n",
-	                   fv.imu_rms_accel, fv.imu_variance,
-	                   fv.imu_peaks, fv.imu_rms_gyro);
-	        }
-	        else
-	        {
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU features non calculees (donnees indisponibles)\r\n");
-	        }
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP OK -> temp=%.2f C, temp_amb=%.2f C\r\n",
+	                               fv.temp, fv.temp_amb);
+	                }
+	                else
+	                {
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP features non calculees (donnees indisponibles)\r\n");
+	                }
 
-	        /* -----------------------------------------------------
-	         * FEATURES TEMPÉRATURE (4 features)
-	         * ----------------------------------------------------- */
-	        static float local_temp_skin[TEMP_BUF_SIZE];
-	        static float local_temp_ambient[TEMP_BUF_SIZE];
-	        uint8_t temp_data_ok = 0;
+	                /* -----------------------------------------------------
+	                 * FEATURES IMU — synchronisées sur t_ref.
+	                 * ----------------------------------------------------- */
+	                uint8_t imu_data_ok = 0;
 
-	        if (!temp_buf_ready)
-	        {
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP buffer pas encore plein (31s), en attente...\r\n");
-	        }
-	        else
-	        {
-	            int32_t idx = Find_Closest_Timestamp_Index(
-	                              temp_ts_buf, temp_buf_idx,
-	                              t_ref, 2000000);
+	                if (!imu_feat_buf_ready)
+	                {
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU buffer pas encore plein, en attente...\r\n");
+	                }
+	                else if (osMutexAcquire(MTX_IMU_BUFHandle, 10) == osOK)
+	                {
+	                    int32_t idx = Find_Closest_Timestamp_Index(
+	                                      imu_feat_ts_buf, imu_feat_buf_idx,
+	                                      t_ref, 300000);
 
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP Find_Closest_Timestamp_Index -> idx=%ld (buf_idx=%d)\r\n",
-	                       idx, temp_buf_idx);
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU Find_Closest_Timestamp_Index -> idx=%ld (buf_idx=%d)\r\n",
+	                               idx, imu_feat_buf_idx);
 
-	            if (idx >= (TEMP_WIN_LONG - 1))
-	            {
-	                memcpy(local_temp_skin, &temp_skin_buf[idx - (TEMP_WIN_LONG - 1)],
-	                       TEMP_WIN_LONG * sizeof(float));
-	                memcpy(local_temp_ambient, &temp_ambient_buf[idx - (TEMP_WIN_LONG - 1)],
-	                       TEMP_WIN_LONG * sizeof(float));
-	                temp_data_ok = 1;
-	            }
-	            else
-	            {
-	                DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP idx insuffisant (< %d), pas assez d'historique\r\n",
-	                           TEMP_WIN_LONG - 1);
-	            }
-	        }
+	                    if (idx >= 103)
+	                    {
+	                        memcpy(local_imu_accel, &imu_accel_buf[idx - 103],
+	                               104 * sizeof(local_imu_accel[0]));
+	                        imu_data_ok = 1;
+	                    }
+	                    else
+	                    {
+	                        DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU idx insuffisant (< 103), pas assez d'historique\r\n");
+	                    }
+	                    osMutexRelease(MTX_IMU_BUFHandle);
+	                }
+	                else
+	                {
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] MTX_IMU_BUFHandle indisponible (timeout 10ms)\r\n");
+	                }
 
-	        if (temp_data_ok)
-	        {
-	            fv.temp_mean     = Temp_Calc_Mean(local_temp_skin, TEMP_WIN_LONG);
-	            fv.temp_delta    = Temp_Calc_Delta(local_temp_skin, local_temp_ambient, TEMP_WIN_LONG);
-	            fv.temp_drift    = Temp_Calc_Drift(local_temp_skin, TEMP_WIN_LONG, TEMP_FS);
-	            fv.temp_variance = Temp_Calc_Var(local_temp_skin, TEMP_WIN_LONG);
+	                if (imu_data_ok)
+	                {
+	                    IMU_Calc_MeanXYZ(local_imu_accel, 104, &fv.acc_x, &fv.acc_y, &fv.acc_z);
 
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP OK -> mean=%.2f C, delta=%.2f C, drift=%.4f C/s, var=%.4f C2\r\n",
-	                       fv.temp_mean, fv.temp_delta, fv.temp_drift, fv.temp_variance);
-	        }
-	        else
-	        {
-	            DBG_PRINT(DEBUG_FEATURES, "[FEATURES] TEMP features non calculees (donnees indisponibles)\r\n");
-	        }
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU OK -> acc_x=%.3f mg, acc_y=%.3f mg, acc_z=%.3f mg\r\n",
+	                               fv.acc_x, fv.acc_y, fv.acc_z);
+	                }
+	                else
+	                {
+	                    DBG_PRINT(DEBUG_FEATURES, "[FEATURES] IMU features non calculees (donnees indisponibles)\r\n");
+	                    fv.acc_x = fv.acc_y = fv.acc_z = 0.0f;
+	                }
 
+	                /* -----------------------------------------------------
+	                 * PROFIL UTILISATEUR — copié intégralement (18 champs),
+	                 * valeurs stables sur tout le run, saisies une fois au
+	                 * démarrage par UserProfile_PromptAndRead().
+	                 * ----------------------------------------------------- */
+	                fv.age                              = user_profile.age;
+	                fv.gender                           = user_profile.gender;
+	                fv.reserved                         = user_profile.reserved;
+	                fv.generally_trusting               = user_profile.generally_trusting;
+	                fv.lazy                             = user_profile.lazy;
+	                fv.relaxed_handless_stress          = user_profile.relaxed_handless_stress;
+	                fv.few_artistic_interests           = user_profile.few_artistic_interests;
+	                fv.sociable                         = user_profile.sociable;
+	                fv.criticize_others                 = user_profile.criticize_others;
+	                fv.thorough_job                     = user_profile.thorough_job;
+	                fv.easily_nervous                   = user_profile.easily_nervous;
+	                fv.active_magination                = user_profile.active_magination;
+	                fv.phisical_fitness                 = user_profile.phisical_fitness;
+	                fv.cardiorespiratory_fitness        = user_profile.cardiorespiratory_fitness;
+	                fv.muscular_strength                = user_profile.muscular_strength;
+	                fv.agility_speed                    = user_profile.agility_speed;
+	                fv.flexibility                      = user_profile.flexibility;
+	                fv.cardiovascular_health_conditions = user_profile.cardiovascular_health_conditions;
 	        /* -----------------------------------------------------
 	         * RESTE COMMENTÉ POUR CE TEST (EMG, envoi vers
 	         * Q_RESULTSHandle) — à réactiver plus tard.

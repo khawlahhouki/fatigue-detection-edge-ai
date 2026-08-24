@@ -46,4 +46,11 @@ float IMU_Calc_Peaks(float accel[][3], uint16_t n, float threshold);
  * Unité : mdps. Indique l'intensité globale de rotation. */
 float IMU_Calc_RMSGyro(float gyro[][3], uint16_t n);
 
+/* Moyenne de chaque axe (X, Y, Z) sur la fenêtre, séparément.
+ * Utilisé pour acc_x/acc_y/acc_z du vecteur de features IA
+ * (contrairement à IMU_Calc_RMS/Var qui travaillent sur la
+ * magnitude combinée des 3 axes). */
+void IMU_Calc_MeanXYZ(float accel[][3], uint16_t n,
+                       float *mean_x, float *mean_y, float *mean_z);
+
 #endif /* IMU_FEATURES_H */

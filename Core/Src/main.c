@@ -34,6 +34,7 @@
 #include "tmp117.h"
 #include "shtc3.h"
 #include "max30102.h"
+#include "user_profile.h"
 #include "lora_interface.h"
 /* USER CODE END Includes */
 
@@ -165,7 +166,6 @@ int main(void)
   } else { printf("[BOOT] MAX30102 (PPG)  ... OK\r\n"); }
 
 
-
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -192,7 +192,36 @@ int main(void)
   {
     Error_Handler();
   }
+  if (BSP_COM_Init(COM1, &BspCOMInit) != BSP_ERROR_NONE)
+  {
+    Error_Handler();
+  }
+  /* UserProfile_PromptAndRead(&hcom_uart[COM1], 30000); */ /* désactivé temporairement, valeurs fixes ci-dessous */
 
+  /* --- Profil utilisateur : valeurs fixes pour test/validation --- */
+  user_profile.age                              = 25.0f;
+  user_profile.gender                           = 1.0f;
+  user_profile.reserved                         = 3.0f;
+  user_profile.generally_trusting                = 5.0f;
+  user_profile.lazy                             = 2.0f;
+  user_profile.relaxed_handless_stress          = 6.0f;
+  user_profile.few_artistic_interests           = 3.0f;
+  user_profile.sociable                         = 7.0f;
+  user_profile.criticize_others                 = 4.0f;
+  user_profile.thorough_job                     = 2.0f;
+  user_profile.easily_nervous                   = 5.0f;
+  user_profile.active_magination                = 6.0f;
+  user_profile.phisical_fitness                 = 4.0f;
+  user_profile.cardiorespiratory_fitness        = 5.0f;
+  user_profile.muscular_strength                = 3.0f;
+  user_profile.agility_speed                    = 4.0f;
+  user_profile.flexibility                      = 5.0f;
+  user_profile.cardiovascular_health_conditions = 1.0f;
+  user_profile_ready = 1;
+
+  printf("[PROFILE] Valeurs fixes chargees (mode test), user_profile_ready=1\r\n");
+  /* Start scheduler */
+  osKernelStart();
   /* Start scheduler */
   osKernelStart();
 

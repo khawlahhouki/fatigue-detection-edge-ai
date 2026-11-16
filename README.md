@@ -160,7 +160,7 @@ fatigue-detection-edge-ai/
 ## Author
 
 **Khaoula Houki**  
-Embedded Systems Engineering Student — ENICarthage  
+Embedded Systems Engineer — ENICarthage  
 ---
 
 ## Academic Context

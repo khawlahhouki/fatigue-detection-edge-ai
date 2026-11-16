@@ -150,10 +150,10 @@ fatigue-detection-edge-ai/
 - [x] LSM6DSO IMU driver
 - [x] NLMS adaptive filter for PPG motion artifact removal
 - [x] Temporal synchronization (TIM2 µs timestamps)
-- [ ] Feature extraction pipeline (in progress)
-- [ ] ML model training & quantization (in progress)
-- [ ] LoRa transmission task (in progress)
-- [ ] PCB fabrication & testing (in progress)
+- [x]  Feature extraction pipeline
+- [x]  ML model training & quantization 
+- [x]  LoRa transmission task 
+- [x]  PCB fabrication & testing 
 
 ---
 

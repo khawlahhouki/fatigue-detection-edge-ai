@@ -117,7 +117,7 @@ Fatigue detection results and vital signs are transmitted wirelessly to an **adm
 | ML Training | Python, TensorFlow/Keras, TFLite |
 | Edge Deployment | X-CUBE-AI, ST Edge AI Core, INT8 quantization |
 | Communication | LoRa (UART), SPI, I2C, DMA |
-| PCB Design | KiCad / Altium |
+| PCB Design | KiCad |
 
 ---
 
